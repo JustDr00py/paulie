@@ -1,18 +1,24 @@
 """
-ui.py — PyQt6 borderless overlay shown while the user is speaking.
+ui.py — PyQt6 borderless overlay and system tray icon.
 
-The window is:
+The overlay window is:
   • Always on top
   • Borderless and transparent background
   • Centred horizontally, pinned to the bottom of the primary screen
   • Shows animated equalizer bars + label while audio capture is active
-  • Transitions to a ripple animation + "Processing…" once VAD triggers end-of-speech
+  • Transitions between Listening / Recording / Processing states
 
-External code drives the overlay via Qt signals so that cross-thread updates
-are safe:
+A system tray icon mirrors the overlay state with a coloured dot and exposes
+the last transcription and a Quit action via its context menu.
 
-    overlay.set_processing_signal.emit()   # switch to processing state
-    overlay.quit_signal.emit()             # close the overlay & quit the app
+External code drives both via Qt signals so that cross-thread updates are safe:
+
+    overlay.set_listening_signal.emit()    # waiting for speech
+    overlay.set_recording_signal.emit()    # speech confirmed
+    overlay.set_processing_signal.emit()   # inference running
+    overlay.set_last_text_signal.emit(s)   # update tray with last transcription
+    overlay.hide_signal.emit()             # hide overlay, tray returns to idle
+    overlay.quit_signal.emit()             # quit the application
 """
 
 from __future__ import annotations
@@ -23,8 +29,11 @@ import random
 import time
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor, QFont, QPainter, QPainterPath
-from PyQt6.QtWidgets import QApplication, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PyQt6.QtGui import QColor, QFont, QIcon, QPainter, QPainterPath, QPixmap
+from PyQt6.QtWidgets import (
+    QApplication, QHBoxLayout, QLabel, QMenu, QSystemTrayIcon,
+    QVBoxLayout, QWidget,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +133,25 @@ class _SoundWave(QWidget):
             painter.fillPath(path, self._color)
 
 
+# ── Tray icon helper ──────────────────────────────────────────────────────────
+
+_TRAY_IDLE_COLOR = "#555555"
+
+def _make_tray_icon(color: str) -> QIcon:
+    """Return a 22×22 QIcon containing a filled circle in *color*."""
+    size = 22
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QColor(color))
+    margin = 3
+    painter.drawEllipse(margin, margin, size - 2 * margin, size - 2 * margin)
+    painter.end()
+    return QIcon(pixmap)
+
+
 # ── Overlay window ────────────────────────────────────────────────────────────
 
 class OverlayWindow(QWidget):
@@ -141,6 +169,7 @@ class OverlayWindow(QWidget):
     set_listening_signal  = pyqtSignal()
     set_recording_signal  = pyqtSignal()
     set_processing_signal = pyqtSignal()
+    set_last_text_signal  = pyqtSignal(str)
     hide_signal           = pyqtSignal()
     quit_signal           = pyqtSignal()
 
@@ -148,6 +177,7 @@ class OverlayWindow(QWidget):
         super().__init__()
         self._setup_window()
         self._build_ui()
+        self._build_tray()
         self._connect_signals()
 
     # ── Window chrome ─────────────────────────────────────────────────────────
@@ -200,12 +230,45 @@ class OverlayWindow(QWidget):
 
         outer.addLayout(row)
 
+    # ── Tray icon ─────────────────────────────────────────────────────────────
+
+    def _build_tray(self) -> None:
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            logger.warning("System tray not available — tray icon disabled.")
+            self._tray: QSystemTrayIcon | None = None
+            return
+
+        self._tray = QSystemTrayIcon(self)
+        self._tray.setIcon(_make_tray_icon(_TRAY_IDLE_COLOR))
+        self._tray.setToolTip("Paulie — idle")
+
+        menu = QMenu()
+        self._tray_status_action = menu.addAction("Idle")
+        self._tray_status_action.setEnabled(False)
+        menu.addSeparator()
+        self._tray_last_action = menu.addAction("No transcription yet")
+        self._tray_last_action.setEnabled(False)
+        menu.addSeparator()
+        quit_action = menu.addAction("Quit Paulie")
+        quit_action.triggered.connect(self.quit_signal.emit)
+
+        self._tray.setContextMenu(menu)
+        self._tray.show()
+
+    def _tray_set(self, color: str, status: str) -> None:
+        if self._tray is None:
+            return
+        self._tray.setIcon(_make_tray_icon(color))
+        self._tray.setToolTip(f"Paulie — {status}")
+        self._tray_status_action.setText(status.capitalize())
+
     # ── Signals ───────────────────────────────────────────────────────────────
 
     def _connect_signals(self) -> None:
         self.set_listening_signal.connect(self._on_listening)
         self.set_recording_signal.connect(self._on_recording)
         self.set_processing_signal.connect(self._on_processing)
+        self.set_last_text_signal.connect(self._on_last_text)
         self.hide_signal.connect(self._on_hide)
         self.quit_signal.connect(self._on_quit)
 
@@ -219,23 +282,36 @@ class OverlayWindow(QWidget):
         self.show()
         # Defer reposition so the compositor maps the window before we move it.
         QTimer.singleShot(0, self._reposition)
+        self._tray_set(_ACCENT_COLOR, "listening…")
 
     def _on_recording(self) -> None:
         self._label.setText("Recording…")
         self._label.setStyleSheet(f"color: {_WHITE_COLOR}; background: transparent;")
         self._wave.set_recording()
+        self._tray_set(_WHITE_COLOR, "recording…")
 
     def _on_processing(self) -> None:
         self._label.setText("Processing…")
         self._label.setStyleSheet(f"color: {_AMBER_COLOR}; background: transparent;")
         self._wave.set_processing()
+        self._tray_set(_AMBER_COLOR, "processing…")
+
+    def _on_last_text(self, text: str) -> None:
+        if not text or self._tray is None:
+            return
+        display = text if len(text) <= 60 else text[:57] + "…"
+        self._tray_last_action.setText(f"Last: {display}")
+        self._tray.setToolTip(f"Paulie — {display}")
 
     def _on_hide(self) -> None:
         self._wave.set_idle()
         self.hide()
+        self._tray_set(_TRAY_IDLE_COLOR, "idle")
 
     def _on_quit(self) -> None:
         self._wave.set_idle()
+        if self._tray is not None:
+            self._tray.hide()
         QApplication.instance().quit()  # type: ignore[union-attr]
 
     # ── Custom painting ───────────────────────────────────────────────────────

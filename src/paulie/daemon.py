@@ -34,7 +34,7 @@ from PyQt6.QtCore import QObject, pyqtSignal
 from PyQt6.QtWidgets import QApplication
 
 from .audio import load_vad_model, record_until_silence
-from .config import apply_config
+from .config import apply_config, write_default_config
 from .inject import inject_text, restore_focus, save_focus
 from .stt import load_model, transcribe
 from .ui import OverlayWindow
@@ -101,8 +101,7 @@ class _TriggerSource(QObject):
         while True:
             try:
                 conn, _ = self._sock.accept()
-                conn.close()
-                self.triggered.emit()
+                self._handle_connection(conn)
             except OSError as exc:
                 if exc.errno in (errno.EINTR, errno.EAGAIN):
                     # Transient interruption — retry immediately.
@@ -113,6 +112,42 @@ class _TriggerSource(QObject):
                 # Log unexpected errors but keep the loop alive.
                 logger.exception("Unexpected error in accept loop — retrying.")
         self._sock.close()
+
+    def _handle_connection(self, conn: socket.socket) -> None:
+        """
+        Read the first byte to determine intent, then act.
+
+        Protocol
+        --------
+        ``\\x01``  Trigger a dictation cycle (new explicit clients).
+        ``\\x00``  Status ping — respond with a JSON line and do not trigger.
+        ``b""``   Connection closed before sending data (legacy clients) — trigger.
+        Any other byte is treated as a trigger for forward-compatibility.
+        """
+        import json
+        try:
+            conn.settimeout(0.1)
+            try:
+                byte = conn.recv(1)
+            except OSError:
+                byte = b""
+
+            if byte == b"\x00":
+                # Status ping — reply and do not trigger.
+                payload = json.dumps({
+                    "running": True,
+                    "socket":  SOCKET_PATH,
+                }).encode()
+                try:
+                    conn.sendall(payload + b"\n")
+                except OSError:
+                    pass
+                logger.debug("Status ping answered.")
+            else:
+                # b"" (legacy), b"\x01" (explicit), or anything else → trigger.
+                self.triggered.emit()
+        finally:
+            conn.close()
 
 
 class _Daemon(QObject):
@@ -170,6 +205,8 @@ class _Daemon(QObject):
             restore_focus(focused)
             time.sleep(0.3)  # wait for hide + focus handback to settle
             inject_text(text)
+            if text:
+                self._overlay.set_last_text_signal.emit(text)
         except Exception:
             logger.exception("Unhandled exception in pipeline.")
             # Ensure the overlay is always dismissed, even on error.
@@ -178,7 +215,33 @@ class _Daemon(QObject):
             self._busy.clear()
 
 
+def _list_devices() -> None:
+    """Print available audio input devices and exit."""
+    import sounddevice as sd
+    devices = sd.query_devices()
+    default_input = sd.default.device[0] if isinstance(sd.default.device, (list, tuple)) else sd.default.device
+    print("Available input devices (* = system default):\n")
+    for i, dev in enumerate(devices):
+        if dev["max_input_channels"] < 1:
+            continue
+        marker = "*" if i == default_input else " "
+        print(f"  {marker} [{i:2d}]  {dev['name']}")
+    print(
+        "\nSet the device in ~/.config/paulie/paulie.conf:\n"
+        '  device = "name substring"   # or an integer index\n'
+        "Or via environment variable:  PAULIE_DEVICE=<name or index>"
+    )
+
+
 def main() -> None:
+    if "--init-config" in sys.argv:
+        write_default_config()
+        return
+
+    if "--list-devices" in sys.argv:
+        _list_devices()
+        return
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s  %(levelname)-8s  %(name)s — %(message)s",

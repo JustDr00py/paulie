@@ -1,5 +1,18 @@
 """
-inject.py — Text injection via ydotool, with focus save/restore.
+inject.py — Text injection with focus save/restore.
+
+Two injection modes are supported, selected by the ``PAULIE_INJECT``
+environment variable (or the ``inject_mode`` key in paulie.conf):
+
+``ydotool`` (default)
+    Simulates keystrokes character-by-character via ydotool / uinput.
+    Requires ydotoold to be running.  Works in all apps on Wayland.
+
+``clipboard``
+    Writes text to the system clipboard (wl-copy on Wayland, xclip on X11),
+    then sends Ctrl+V (wtype on Wayland, xdotool on X11).
+    Does not require ydotoold.  Use this if ydotool type has timing issues
+    in a specific app or if you cannot run ydotoold.
 """
 
 from __future__ import annotations
@@ -95,8 +108,98 @@ def restore_focus(token: str | None) -> None:
         logger.warning("restore_focus failed: %s", exc)
 
 
+def inject_text_clipboard(text: str) -> None:
+    """
+    Inject text via clipboard paste (wl-copy / xclip) + Ctrl+V keystroke.
+
+    Does not require ydotoold.  Requires wl-clipboard (Wayland) or xclip (X11)
+    for clipboard writing, and wtype (Wayland) or xdotool (X11) for the
+    paste keystroke.
+    """
+    if not text:
+        logger.warning("Empty transcription — nothing to inject.")
+        return
+
+    on_wayland = bool(os.environ.get("WAYLAND_DISPLAY"))
+    env: dict[str, str] = {
+        "PATH":            os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
+        "HOME":            os.environ.get("HOME", ""),
+        "XDG_RUNTIME_DIR": os.environ.get("XDG_RUNTIME_DIR", ""),
+        "WAYLAND_DISPLAY": os.environ.get("WAYLAND_DISPLAY", ""),
+        "DISPLAY":         os.environ.get("DISPLAY", ""),
+    }
+
+    # ── Step 1: write to clipboard ────────────────────────────────────────────
+    if on_wayland:
+        clip_cmd = ["wl-copy", "--", text]
+        clip_tool = "wl-copy"
+    else:
+        clip_cmd = ["xclip", "-selection", "clipboard"]
+        clip_tool = "xclip"
+
+    logger.info("Clipboard injection: writing %d chars via %s.", len(text), clip_tool)
+    try:
+        proc = subprocess.run(
+            clip_cmd,
+            input=text if not on_wayland else None,   # xclip reads stdin
+            capture_output=True,
+            text=True,
+            timeout=5,
+            env=env,
+        )
+        if proc.returncode != 0:
+            logger.error("%s failed: %s", clip_tool, proc.stderr.strip())
+            return
+    except FileNotFoundError:
+        logger.error(
+            "%s not found. Install it with: %s",
+            clip_tool,
+            "rpm-ostree install wl-clipboard" if on_wayland else "rpm-ostree install xclip",
+        )
+        return
+    except subprocess.TimeoutExpired:
+        logger.error("%s timed out.", clip_tool)
+        return
+
+    # ── Step 2: send Ctrl+V ───────────────────────────────────────────────────
+    # Try the native Wayland/X11 tool first; fall back to ydotool.
+    if on_wayland:
+        paste_cmds = [["wtype", "-k", "ctrl+v"], ["ydotool", "key", "ctrl+v"]]
+    else:
+        paste_cmds = [["xdotool", "key", "ctrl+v"], ["ydotool", "key", "ctrl+v"]]
+
+    for cmd in paste_cmds:
+        try:
+            subprocess.run(cmd, check=True, capture_output=True, timeout=3, env=env)
+            logger.info("Clipboard paste keystroke sent via %s.", cmd[0])
+            return
+        except FileNotFoundError:
+            logger.debug("%s not found, trying next option.", cmd[0])
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            logger.warning("Paste keystroke via %s failed: %s", cmd[0], exc)
+
+    logger.error(
+        "Could not send Ctrl+V. Install %s.",
+        "wtype (rpm-ostree install wtype)" if on_wayland else "xdotool",
+    )
+
+
 def inject_text(text: str) -> None:
-    """Inject transcribed text into the focused window via ydotool."""
+    """
+    Inject transcribed text into the focused window.
+
+    Dispatches to ``inject_text_clipboard`` or the ydotool implementation
+    based on the ``PAULIE_INJECT`` environment variable (default: ``ydotool``).
+    """
+    mode = os.environ.get("PAULIE_INJECT", "ydotool").strip().lower()
+    if mode == "clipboard":
+        inject_text_clipboard(text)
+        return
+    _inject_text_ydotool(text)
+
+
+def _inject_text_ydotool(text: str) -> None:
+    """Inject text character-by-character via ydotool / uinput."""
     if not text:
         logger.warning("Empty transcription — nothing to inject.")
         return

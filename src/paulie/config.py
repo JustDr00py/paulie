@@ -35,9 +35,74 @@ _KEY_TO_ENV: dict[str, str] = {
     "vad_threshold": "PAULIE_VAD_THRESHOLD",
     "model":         "PAULIE_MODEL",
     "device":        "PAULIE_DEVICE",
+    "inject_mode":   "PAULIE_INJECT",
 }
 
 _DEFAULT_CONFIG_PATH = Path.home() / ".config" / "paulie" / "paulie.conf"
+
+
+_DEFAULT_CONFIG_CONTENT = """\
+# ~/.config/paulie/paulie.conf
+# Paulie STT daemon configuration — TOML format.
+#
+# Environment variables always override these values.
+# Restart paulie-daemon after making changes:
+#   systemctl --user restart paulie-daemon
+
+# Seconds of silence after speech before recording stops and transcription begins.
+# Lower values feel snappier; higher values give you more time to pause mid-sentence.
+silence_s = 1.0
+
+# silero-VAD speech probability cutoff (0.0–1.0).
+# Raise this if background noise triggers false starts.
+# Lower this if the first syllable of a word is being clipped.
+vad_threshold = 0.45
+
+# onnx-asr model name.  Parakeet is fast, English-only, and runs well on CPU.
+# Whisper models (e.g. "whisper-base") are slower but support multiple languages.
+model = "nemo-parakeet-tdt-0.6b-v3"
+
+# Microphone device — name substring or integer index.
+# Leave empty to use the system default.
+# List available devices with:
+#   paulie-daemon --list-devices
+device = ""
+
+# Text injection mode.
+#   ydotool   — simulate keystrokes via uinput (default, requires ydotoold)
+#   clipboard — write to clipboard and send Ctrl+V (requires wl-clipboard + wtype,
+#               or xclip + xdotool on X11; no ydotoold needed)
+inject_mode = "ydotool"
+"""
+
+
+def write_default_config() -> None:
+    """
+    Write a commented default config file to ``~/.config/paulie/paulie.conf``.
+
+    Exits with a non-zero status if the file already exists (to avoid
+    silently overwriting user edits) or if the directory cannot be created.
+    """
+    import sys
+
+    config_path = Path(os.environ.get("PAULIE_CONFIG", str(_DEFAULT_CONFIG_PATH)))
+
+    if config_path.exists():
+        print(
+            f"error: config file already exists at {config_path}\n"
+            "Remove it first if you want to regenerate defaults.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    try:
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(_DEFAULT_CONFIG_CONTENT, encoding="utf-8")
+    except OSError as exc:
+        print(f"error: could not write config file: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Config written to {config_path}")
 
 
 def apply_config() -> None:

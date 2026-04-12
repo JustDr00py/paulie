@@ -46,6 +46,39 @@ Paulie runs as two processes:
 
 ---
 
+## Quick Install
+
+```bash
+git clone <repo-url>
+cd paulie
+./install.sh
+```
+
+That's it. The script handles system dependencies, pipx, the Paulie package,
+the default config file, the ydotoold system service, and the paulie-daemon
+user service. At the end it prints the one manual step: registering your
+global hotkey.
+
+```bash
+./install.sh --upgrade    # reinstall from source, keep existing config
+./install.sh --uninstall  # stop services and remove the package
+```
+
+Supported systems: Bazzite / Fedora Silverblue (rpm-ostree), Fedora (dnf), Debian/Ubuntu (apt).
+
+> **Note — rpm-ostree:** On immutable distros the script installs system
+> packages via `rpm-ostree` and prompts for a reboot.  After rebooting, re-run
+> `./install.sh` and it will continue from where it left off.
+
+---
+
+## Manual Installation
+
+The sections below document each step individually, for reference or for systems
+the install script doesn't fully support.
+
+---
+
 ## Prerequisites
 
 ### 1  Install ydotool
@@ -118,6 +151,15 @@ pipx ensurepath
 cd /path/to/paulie
 pipx install .
 ```
+
+**3. Generate the default config file:**
+```bash
+paulie-daemon --init-config
+```
+
+This writes a commented `~/.config/paulie/paulie.conf` with all available
+options and their defaults.  Edit it to taste before starting the daemon.
+If the file already exists the command exits without overwriting it.
 
 **3. (Optional) Use CUDA torch for faster inference:**
 ```bash
@@ -245,7 +287,12 @@ already set in the environment.
 
 ### Config file (recommended)
 
-Create `~/.config/paulie/paulie.conf`:
+Generate the default file with all options pre-filled:
+```bash
+paulie-daemon --init-config
+```
+
+Or create `~/.config/paulie/paulie.conf` manually:
 
 ```toml
 # ~/.config/paulie/paulie.conf
@@ -273,6 +320,7 @@ in the `[Service]` section of `~/.config/systemd/user/paulie-daemon.service`.
 | `PAULIE_VAD_THRESHOLD` | `0.45` | silero-VAD speech probability cutoff (0.0–1.0) |
 | `PAULIE_MODEL` | `nemo-parakeet-tdt-0.6b-v3` | onnx-asr model name |
 | `PAULIE_DEVICE` | system default | `sounddevice` input device — name substring or integer index |
+| `PAULIE_INJECT` | `ydotool` | Injection mode: `ydotool` or `clipboard` |
 | `PAULIE_CONFIG` | `~/.config/paulie/paulie.conf` | Override the config file path |
 | `YDOTOOL_SOCKET` | auto-detected¹ | Path to the ydotoold socket |
 | `WAYLAND_DISPLAY` | inherited | Wayland compositor socket — required when running under systemd |
@@ -298,6 +346,41 @@ systemctl --user daemon-reload && systemctl --user restart paulie-daemon
 
 ---
 
+## Commands
+
+### `paulie` — hotkey client
+
+```bash
+paulie              # trigger dictation (or cancel if already recording)
+paulie status       # print daemon status, socket path, and config location
+```
+
+### `paulie-daemon` — persistent daemon
+
+```bash
+paulie-daemon                  # start the daemon (add to autostart)
+paulie-daemon --init-config    # write default config to ~/.config/paulie/paulie.conf
+paulie-daemon --list-devices   # list available microphone inputs
+```
+
+### Clipboard injection mode
+
+If you cannot run `ydotoold` or encounter typing issues in a specific app,
+switch to clipboard mode in `paulie.conf`:
+
+```toml
+inject_mode = "clipboard"
+```
+
+This writes the transcription to the system clipboard and sends Ctrl+V.
+Requires `wl-clipboard` + `wtype` on Wayland, or `xclip` + `xdotool` on X11:
+
+```bash
+rpm-ostree install wl-clipboard wtype
+```
+
+---
+
 ## Project Structure
 
 ```
@@ -308,10 +391,10 @@ paulie/
 │       ├── audio.py      # sounddevice + silero-VAD recording loop
 │       ├── config.py     # TOML config file loader (~/.config/paulie/paulie.conf)
 │       ├── stt.py        # Parakeet model load + transcribe
-│       ├── inject.py     # ydotool text injection
-│       ├── ui.py         # PyQt6 borderless overlay
+│       ├── inject.py     # text injection (ydotool or clipboard mode)
+│       ├── ui.py         # PyQt6 borderless overlay + system tray icon
 │       ├── daemon.py     # persistent daemon — loads models, handles triggers
-│       └── main.py       # thin client — sends trigger to daemon
+│       └── main.py       # thin client — trigger or status query
 ├── pyproject.toml        # packaging (hatchling)
 ├── requirements.txt      # pinned deps for manual venv installs
 └── README.md
@@ -326,6 +409,10 @@ paulie/
 | `error: paulie daemon is not running` | Run `systemctl --user start paulie-daemon` or check `journalctl --user -u paulie-daemon` |
 | Config file changes not taking effect | Restart the daemon: `systemctl --user restart paulie-daemon`. The config is read once at startup. |
 | Cancel (second hotkey press) doesn't stop recording | Confirm `paulie` is reaching the daemon: run `paulie` manually in a terminal and check `journalctl --user -u paulie-daemon` for `Cancel requested`. |
+| `paulie status` shows "not running" when daemon is running | Ensure `XDG_RUNTIME_DIR` is the same in both the daemon and the terminal. Run `echo $XDG_RUNTIME_DIR` in both contexts. |
+| Clipboard mode: text not pasted | Check that `wl-copy` and `wtype` are installed (`rpm-ostree install wl-clipboard wtype`). Check logs for which step failed. |
+| System tray icon not showing | Tray support depends on the desktop. GNOME requires the AppIndicator extension. KDE Plasma shows it natively. |
+| `--list-devices` output is empty | No input devices found by sounddevice. Check that your mic is recognised by the OS: `pactl list sources`. |
 | `ydotool not found` | `rpm-ostree install ydotool` then reboot |
 | `ydotool failed (2)` / no text typed | ydotoold socket not found — run `systemctl status ydotoold` and confirm `ls ~/.ydotool_socket` exists; set `YDOTOOL_SOCKET` explicitly if the path is non-standard |
 | `ydotool timed out` | Happens on long dictations if key injection is too slow. Paulie uses `--key-delay=1` (1 ms/char) with a dynamic timeout — ensure you are running the latest version via `pipx install . --force` |
