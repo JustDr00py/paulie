@@ -45,10 +45,11 @@ SUGGESTED_HOTKEY="Meta+Alt+P"
 
 # ── Package manager detection ──────────────────────────────────────────────────
 detect_pkgmgr() {
-  if   command -v rpm-ostree &>/dev/null; then echo "rpm-ostree"
-  elif command -v dnf        &>/dev/null; then echo "dnf"
-  elif command -v apt-get    &>/dev/null; then echo "apt"
-  else                                        echo "unknown"
+  if [[ -f /run/ostree-booted ]] && command -v rpm-ostree &>/dev/null; then
+    echo "rpm-ostree"
+  elif command -v dnf     &>/dev/null; then echo "dnf"
+  elif command -v apt-get &>/dev/null; then echo "apt"
+  else                                       echo "unknown"
   fi
 }
 
