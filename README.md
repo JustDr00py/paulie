@@ -293,6 +293,7 @@ paulie/
 | `error: paulie daemon is not running` | Run `systemctl --user start paulie-daemon` or check `journalctl --user -u paulie-daemon` |
 | `ydotool not found` | `rpm-ostree install ydotool` then reboot |
 | `ydotool failed (2)` / no text typed | ydotoold socket not found — run `systemctl status ydotoold` and confirm `ls ~/.ydotool_socket` exists; set `YDOTOOL_SOCKET` explicitly if the path is non-standard |
+| `ydotool timed out` | Happens on long dictations if key injection is too slow. Paulie uses `--key-delay=1` (1 ms/char) with a dynamic timeout — ensure you are running the latest version via `pipx install . --force` |
 | Transcription cuts off early | Recording hit the 120 s ceiling — check logs for `Maximum recording duration reached`; also verify `PAULIE_SILENCE_S` isn't set too high |
 | Overlay doesn't appear | `WAYLAND_DISPLAY` not set — add `Environment=WAYLAND_DISPLAY=wayland-0` to the service file or run `systemctl --user import-environment WAYLAND_DISPLAY` |
 | `Neither WAYLAND_DISPLAY nor DISPLAY is set` | Same as above |
@@ -300,7 +301,7 @@ paulie/
 | `libGL.so.1` / `libEGL.so.1` / `libfontconfig.so.1` missing | `rpm-ostree install mesa-libGL mesa-libEGL qt6-qtbase fontconfig` then reboot |
 | `No such file or directory: 'paulie'` | Run `pipx ensurepath` and restart shell |
 | `CUDA out of memory` | Set `CUDA_VISIBLE_DEVICES=""` to force CPU mode |
-| Wrong microphone used | Set `PAULIE_DEVICE` to the device name or index; list devices with `python3 -c "import sounddevice; print(sounddevice.query_devices())"` |
+| Wrong microphone used | Set `PAULIE_DEVICE` to the device name or index; list devices with `pipx run --spec . python3 -c "import sounddevice; print(sounddevice.query_devices())"` |
 
 ---
 
