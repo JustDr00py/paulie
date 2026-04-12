@@ -68,6 +68,7 @@ install_system_deps() {
     rpm-ostree)
       # Collect only the packages that aren't already layered.
       local wanted=(
+        pipx
         python3-devel gcc gcc-c++ cmake ninja-build portaudio-devel
         ydotool wl-clipboard wtype
       )
