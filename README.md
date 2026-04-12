@@ -426,7 +426,11 @@ paulie-daemon --init-config    # write default config to ~/.config/paulie/paulie
 paulie-daemon --list-devices   # list available microphone inputs
 ```
 
-### Utterance mode (per-sentence injection)
+### Utterance mode (per-sentence injection) ⚠️ Experimental
+
+> **Experimental:** utterance mode is functional but may behave unexpectedly
+> depending on microphone quality, background noise, and VAD tuning.  Single
+> mode is recommended for everyday use.
 
 In utterance mode the mic stays open after the first hotkey press.  Each time
 you pause for `utterance_pause_s` (default 0.5 s), that sentence is transcribed
