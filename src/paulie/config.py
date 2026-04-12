@@ -31,12 +31,14 @@ logger = logging.getLogger(__name__)
 
 # Mapping from config file key → environment variable name.
 _KEY_TO_ENV: dict[str, str] = {
-    "silence_s":     "PAULIE_SILENCE_S",
-    "vad_threshold": "PAULIE_VAD_THRESHOLD",
-    "max_record_s":  "PAULIE_MAX_RECORD_S",
-    "model":         "PAULIE_MODEL",
-    "device":        "PAULIE_DEVICE",
-    "inject_mode":   "PAULIE_INJECT",
+    "silence_s":         "PAULIE_SILENCE_S",
+    "vad_threshold":     "PAULIE_VAD_THRESHOLD",
+    "max_record_s":      "PAULIE_MAX_RECORD_S",
+    "model":             "PAULIE_MODEL",
+    "device":            "PAULIE_DEVICE",
+    "inject_mode":       "PAULIE_INJECT",
+    "mode":              "PAULIE_MODE",
+    "utterance_pause_s": "PAULIE_UTTERANCE_PAUSE_S",
 }
 
 _DEFAULT_CONFIG_PATH = Path.home() / ".config" / "paulie" / "paulie.conf"
@@ -99,6 +101,18 @@ device = ""
 #   clipboard — write to clipboard and send Ctrl+V (requires wl-clipboard + wtype,
 #               or xclip + xdotool on X11; no ydotoold needed)
 inject_mode = "ydotool"
+
+# Dictation mode.
+#   single    — one recording per hotkey press, transcribed as a whole (default)
+#   utterance — mic stays open across sentences; each sentence is transcribed
+#               and injected as you finish speaking it
+mode = "single"
+
+# Utterance mode only: seconds of silence that end one sentence and trigger
+# transcription of that sentence.  The next sentence begins when you speak again.
+# In utterance mode, set silence_s higher (e.g. 2.0) so the session doesn't
+# end during a natural thinking pause between sentences.
+utterance_pause_s = 0.5
 """
 
 

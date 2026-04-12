@@ -1,21 +1,23 @@
 """
 audio.py — Microphone capture with Silero-VAD silence detection.
 
-Records from the default input device at 16 kHz mono.  A chunk of audio is
-fed to the VAD model every CHUNK_MS milliseconds.  Recording stops when:
-  - Speech has been detected at least once, AND
-  - Silence has persisted for longer than PAULIE_SILENCE_S seconds.
+Two recording modes are provided:
 
-Two safety ceilings prevent runaway recording:
+``record_until_silence`` (single mode)
+    Records one continuous clip.  Stops when silence exceeds
+    PAULIE_SILENCE_S, the hard ceiling is reached, or an abort is requested.
+    Returns a numpy float32 array ready for transcription.
+
+``record_utterances`` (utterance mode)
+    Keeps the microphone open across multiple sentences.  Calls
+    ``on_utterance(audio)`` at each natural pause (PAULIE_UTTERANCE_PAUSE_S),
+    allowing the caller to transcribe and inject each sentence as it finishes.
+    The session ends when silence exceeds PAULIE_SILENCE_S (recommend ≥ 2 s
+    in utterance mode) or an abort is requested.
+
+Safety ceilings common to both modes:
   - MAX_PRE_SPEECH_S: give up if no speech starts within this window.
-  - MAX_RECORD_S: hard cap on total recording time regardless of VAD state.
-
-Recording can also be cancelled at any time by setting the optional
-``abort_event`` threading.Event passed to ``record_until_silence``.
-
-Returns a numpy float32 array (16 kHz, mono) ready for transcription.
-An empty array is returned when no speech was detected, the pre-speech
-timeout fired, or an abort was requested.
+  - PAULIE_MAX_RECORD_S: hard cap on total recording time.
 """
 
 from __future__ import annotations
@@ -222,3 +224,167 @@ def record_until_silence(
     audio = np.concatenate(all_chunks, axis=0)
     logger.info("Recorded %.2f seconds of audio.", len(audio) / SAMPLE_RATE)
     return audio
+
+
+def record_utterances(
+    on_utterance: Callable[[np.ndarray], None],
+    on_speech_start: Callable[[], None] | None = None,
+    abort_event: threading.Event | None = None,
+) -> None:
+    """
+    Keep the microphone open and call ``on_utterance(audio)`` at each natural
+    sentence pause, continuing until a longer session-end silence or abort.
+
+    Parameters
+    ----------
+    on_utterance:
+        Called with a float32 16 kHz numpy array for each detected utterance.
+        Invoked from the recording thread — the implementation should be
+        non-blocking (e.g. submit work to a thread pool and return immediately).
+
+    on_speech_start:
+        Called once when speech is first detected in the session.  Same
+        threading caveat as ``record_until_silence``.
+
+    abort_event:
+        When set, recording stops immediately and any buffered audio is
+        discarded.
+
+    Environment variables
+    ---------------------
+    PAULIE_UTTERANCE_PAUSE_S  Silence that ends one utterance (default 0.5 s).
+    PAULIE_SILENCE_S          Silence that ends the whole session (default 2.0 s
+                              in utterance mode — increase if you pause to think).
+    PAULIE_VAD_THRESHOLD      Speech probability cutoff (default 0.45).
+    PAULIE_MAX_RECORD_S       Hard ceiling on total session duration (default 120 s).
+    """
+    utterance_pause_s: float = float(os.environ.get("PAULIE_UTTERANCE_PAUSE_S", "0.5"))
+    # Use a longer default for session-end in utterance mode so a natural
+    # thinking pause doesn't close the session prematurely.
+    session_end_s: float = float(os.environ.get("PAULIE_SILENCE_S", "2.0"))
+    vad_threshold: float = float(os.environ.get("PAULIE_VAD_THRESHOLD", "0.45"))
+    max_record_s: float = float(os.environ.get("PAULIE_MAX_RECORD_S", "120.0"))
+
+    # Guard: session-end must be longer than the utterance pause or the session
+    # would end the moment an utterance finishes.
+    if session_end_s <= utterance_pause_s:
+        session_end_s = utterance_pause_s + 1.0
+        logger.warning(
+            "PAULIE_SILENCE_S (%.1f s) ≤ PAULIE_UTTERANCE_PAUSE_S (%.1f s) — "
+            "using %.1f s as session-end silence.",
+            session_end_s - 1.0, utterance_pause_s, session_end_s,
+        )
+
+    vad_model = load_vad_model()
+    if hasattr(vad_model, "reset_states"):
+        vad_model.reset_states()
+
+    utterance_pause_chunks: int = int(utterance_pause_s * SAMPLE_RATE / CHUNK_SAMPLES)
+    session_end_chunks: int    = int(session_end_s    * SAMPLE_RATE / CHUNK_SAMPLES)
+    max_chunks: int            = int(max_record_s     * SAMPLE_RATE / CHUNK_SAMPLES)
+
+    utterance_buf: list[np.ndarray] = []
+    silence_chunks: int  = 0
+    speech_in_utt: bool  = False   # speech detected in the current utterance
+    session_started: bool = False  # at least one utterance has been heard
+    speech_cb_fired: bool = False
+    total_chunks: int    = 0
+    start_time: float    = time.monotonic()
+
+    _queue: deque[np.ndarray] = deque()
+
+    def _audio_callback(indata: np.ndarray, frames: int, time_info, status) -> None:
+        if status:
+            logger.warning("sounddevice status: %s", status)
+        _queue.append(indata[:, 0].copy())
+
+    _device_env = os.environ.get("PAULIE_DEVICE", "")
+    _device: str | int | None = None
+    if _device_env:
+        _device = int(_device_env) if _device_env.isdigit() else _device_env
+
+    logger.info("Utterance mode: opening microphone (device=%r).", _device)
+    logger.info(
+        "Utterance pause: %.1f s  |  Session end: %.1f s  |  Max: %.0f s",
+        utterance_pause_s, session_end_s, max_record_s,
+    )
+
+    with sd.InputStream(
+        samplerate=SAMPLE_RATE,
+        channels=1,
+        dtype="float32",
+        blocksize=CHUNK_SAMPLES,
+        callback=_audio_callback,
+        device=_device,
+    ):
+        while True:
+            # ── Abort / ceiling checks ─────────────────────────────────────
+            if abort_event is not None and abort_event.is_set():
+                logger.info("Utterance recording cancelled.")
+                return
+
+            if total_chunks >= max_chunks:
+                logger.warning("Maximum recording duration reached — ending session.")
+                break
+
+            if not session_started:
+                if time.monotonic() - start_time > MAX_PRE_SPEECH_S:
+                    logger.warning("No speech detected within %.1f s — ending session.", MAX_PRE_SPEECH_S)
+                    return
+
+            # ── Consume one chunk ──────────────────────────────────────────
+            if not _queue:
+                sd.sleep(5)
+                continue
+
+            chunk = _queue.popleft()
+            utterance_buf.append(chunk)
+            total_chunks += 1
+
+            tensor = torch.from_numpy(chunk)
+            with torch.no_grad():
+                speech_prob: float = vad_model(tensor, SAMPLE_RATE).item()
+
+            # ── VAD decision ───────────────────────────────────────────────
+            if speech_prob >= vad_threshold:
+                silence_chunks = 0
+                if not speech_in_utt:
+                    speech_in_utt   = True
+                    session_started = True
+                    logger.info("Speech detected.")
+                    if on_speech_start and not speech_cb_fired:
+                        speech_cb_fired = True
+                        on_speech_start()
+            else:
+                silence_chunks += 1
+
+                if speech_in_utt:
+                    # ── Utterance boundary ─────────────────────────────────
+                    if silence_chunks >= utterance_pause_chunks:
+                        audio = np.concatenate(utterance_buf)
+                        logger.info(
+                            "Utterance boundary — flushing %.2f s of audio.",
+                            len(audio) / SAMPLE_RATE,
+                        )
+                        on_utterance(audio)
+                        # Reset for the next utterance; keep VAD clean.
+                        utterance_buf  = []
+                        silence_chunks = 0
+                        speech_in_utt  = False
+                        if hasattr(vad_model, "reset_states"):
+                            vad_model.reset_states()
+                else:
+                    # ── Session-end silence (no speech in current window) ──
+                    if silence_chunks >= session_end_chunks:
+                        logger.info(
+                            "Session-end silence (%.1f s) reached — ending.", session_end_s
+                        )
+                        break
+
+    # Flush any trailing speech that didn't hit the utterance-pause threshold
+    # (e.g. user was still speaking when max_record_s fired).
+    if utterance_buf and speech_in_utt:
+        audio = np.concatenate(utterance_buf)
+        if len(audio) / SAMPLE_RATE >= 0.1:
+            logger.info("Flushing trailing %.2f s of audio.", len(audio) / SAMPLE_RATE)
+            on_utterance(audio)

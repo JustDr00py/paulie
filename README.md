@@ -324,6 +324,8 @@ in the `[Service]` section of `~/.config/systemd/user/paulie-daemon.service`.
 | `PAULIE_MODEL` | `nemo-parakeet-tdt-0.6b-v3` | onnx-asr model name |
 | `PAULIE_DEVICE` | system default | `sounddevice` input device — name substring or integer index |
 | `PAULIE_INJECT` | `ydotool` | Injection mode: `ydotool` or `clipboard` |
+| `PAULIE_MODE` | `single` | Dictation mode: `single` or `utterance` |
+| `PAULIE_UTTERANCE_PAUSE_S` | `0.5` | Utterance mode: silence between sentences (seconds) |
 | `PAULIE_CONFIG` | `~/.config/paulie/paulie.conf` | Override the config file path |
 | `YDOTOOL_SOCKET` | auto-detected¹ | Path to the ydotoold socket |
 | `WAYLAND_DISPLAY` | inherited | Wayland compositor socket — required when running under systemd |
@@ -423,6 +425,29 @@ paulie-daemon                  # start the daemon (add to autostart)
 paulie-daemon --init-config    # write default config to ~/.config/paulie/paulie.conf
 paulie-daemon --list-devices   # list available microphone inputs
 ```
+
+### Utterance mode (per-sentence injection)
+
+In utterance mode the mic stays open after the first hotkey press.  Each time
+you pause for `utterance_pause_s` (default 0.5 s), that sentence is transcribed
+and injected immediately.  The session ends when you pause for `silence_s`
+(recommend 2.0 s) or press the hotkey again to cancel.
+
+Enable it in `paulie.conf`:
+
+```toml
+mode              = "utterance"
+utterance_pause_s = 0.5    # pause between sentences
+silence_s         = 2.0    # longer pause ends the session
+```
+
+The overlay stays in **Recording…** state throughout.  Text appears
+incrementally as each sentence completes rather than all at once at the end.
+
+> **Note on accuracy:** Parakeet performs best on full sentences.  Very short
+> clips (< 1 s) may produce lower accuracy than single mode.  If you notice
+> clipped words at the start of a sentence, increase `utterance_pause_s`
+> slightly (e.g. 0.7).
 
 ### Clipboard injection mode
 

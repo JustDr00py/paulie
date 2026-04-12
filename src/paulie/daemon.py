@@ -33,7 +33,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "wayland")
 from PyQt6.QtCore import QObject, pyqtSignal
 from PyQt6.QtWidgets import QApplication
 
-from .audio import load_vad_model, record_until_silence
+from .audio import load_vad_model, record_until_silence, record_utterances
 from .config import apply_config, write_default_config
 from .inject import inject_text, restore_focus, save_focus
 from .stt import load_model, transcribe
@@ -177,7 +177,9 @@ class _Daemon(QObject):
         # which window to return to after injection.
         focused = save_focus()
         self._overlay.set_listening_signal.emit()
-        threading.Thread(target=self._pipeline, args=(focused,), daemon=True).start()
+        mode = os.environ.get("PAULIE_MODE", "single").strip().lower()
+        target = self._pipeline_utterance if mode == "utterance" else self._pipeline
+        threading.Thread(target=target, args=(focused,), daemon=True).start()
 
     def _pipeline(self, focused: str | None) -> None:
         try:
@@ -212,6 +214,60 @@ class _Daemon(QObject):
             # Ensure the overlay is always dismissed, even on error.
             self._overlay.hide_signal.emit()
         finally:
+            self._busy.clear()
+
+    def _pipeline_utterance(self, focused: str | None) -> None:
+        """
+        Utterance mode pipeline.
+
+        Keeps the microphone open across multiple sentences.  Each utterance
+        is transcribed and injected concurrently so audio collection continues
+        without waiting for the previous transcription to finish.
+        """
+        focus_restored = False
+
+        def _transcribe_and_inject(audio: "np.ndarray") -> None:  # noqa: F821
+            nonlocal focus_restored
+            text = transcribe(self._model, audio)
+            logger.debug("Utterance transcription: %r", text)
+            logger.info("Utterance: %d chars.", len(text))
+            if not text:
+                return
+            # Restore focus before the very first injection so the target
+            # window is active.  Subsequent utterances go to the same window.
+            if not focus_restored:
+                restore_focus(focused)
+                time.sleep(0.15)
+                focus_restored = True
+            inject_text(text)
+            self._overlay.set_last_text_signal.emit(text)
+
+        try:
+            # Single-worker pool keeps injections in order while still allowing
+            # audio collection to continue during transcription.
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                futures: list = []
+
+                def on_utterance(audio: "np.ndarray") -> None:  # noqa: F821
+                    futures.append(pool.submit(_transcribe_and_inject, audio))
+
+                record_utterances(
+                    on_utterance=on_utterance,
+                    on_speech_start=self._overlay.set_recording_signal.emit,
+                    abort_event=self._abort_event,
+                )
+
+                # Drain any in-flight transcriptions before hiding the overlay.
+                for future in futures:
+                    try:
+                        future.result()
+                    except Exception:
+                        logger.exception("Utterance transcription/injection failed.")
+
+        except Exception:
+            logger.exception("Unhandled exception in utterance pipeline.")
+        finally:
+            self._overlay.hide_signal.emit()
             self._busy.clear()
 
 
