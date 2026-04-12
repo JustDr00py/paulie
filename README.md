@@ -324,7 +324,7 @@ in the `[Service]` section of `~/.config/systemd/user/paulie-daemon.service`.
 | `PAULIE_MODEL` | `nemo-parakeet-tdt-0.6b-v3` | onnx-asr model name |
 | `PAULIE_DEVICE` | system default | `sounddevice` input device — name substring or integer index |
 | `PAULIE_INJECT` | `ydotool` | Injection mode: `ydotool` or `clipboard` |
-| `PAULIE_MODE` | `single` | Dictation mode: `single` or `utterance` |
+| `PAULIE_MODE` | `single` | Dictation mode: `single` or `utterance` *(experimental)* |
 | `PAULIE_UTTERANCE_PAUSE_S` | `0.5` | Utterance mode: silence between sentences (seconds) |
 | `PAULIE_CONFIG` | `~/.config/paulie/paulie.conf` | Override the config file path |
 | `YDOTOOL_SOCKET` | auto-detected¹ | Path to the ydotoold socket |
