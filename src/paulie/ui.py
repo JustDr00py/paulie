@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 # ── Design tokens ─────────────────────────────────────────────────────────────
 _WINDOW_WIDTH = 320
 _WINDOW_HEIGHT = 64
-_BOTTOM_MARGIN = 48          # pixels from the bottom of the screen
+_BOTTOM_MARGIN = 16          # pixels from the bottom of the screen
 _BORDER_RADIUS = 18          # px — pill shape
 _BG_COLOR = QColor(18, 18, 18, 210)   # near-black, slightly transparent
 _TEXT_COLOR = "#FFFFFF"
@@ -142,7 +142,8 @@ class OverlayWindow(QWidget):
         self._label.setText("Listening…")
         self._dot.setStyleSheet(f"color: {_ACCENT_COLOR}; background: transparent;")
         self.setWindowOpacity(1.0)
-        self.show()  # ToolTip (xdg_popup) cannot steal keyboard focus by protocol
+        self.show()
+        self._reposition()  # reposition after show — Wayland ignores pre-show move()
         if not self._pulse_timer.isActive():
             self._pulse_timer.start(_PULSE_INTERVAL_MS)
 
