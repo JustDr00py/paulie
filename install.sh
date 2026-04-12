@@ -100,12 +100,19 @@ install_system_deps() {
 
     dnf)
       sudo dnf install -y \
+        pipx \
         python3-devel gcc gcc-c++ cmake ninja-build portaudio-devel \
         ydotool wl-clipboard wtype
       ok "System dependencies installed."
       ;;
 
     apt)
+      # pipx landed in apt on Ubuntu 23.04+ / Debian 12+.
+      # On older releases it won't be found, so we fall back to pip in install_pipx().
+      sudo apt-get install -y \
+        pipx \
+        python3-dev gcc g++ cmake ninja-build libportaudio2 libportaudio-dev \
+        ydotool wl-clipboard 2>/dev/null || \
       sudo apt-get install -y \
         python3-dev gcc g++ cmake ninja-build libportaudio2 libportaudio-dev \
         ydotool wl-clipboard
@@ -118,7 +125,7 @@ install_system_deps() {
 
     *)
       warn "Unknown package manager. Ensure these are installed before continuing:"
-      info "  python3-devel  gcc  gcc-c++  cmake  ninja-build  portaudio-devel"
+      info "  pipx  python3-devel  gcc  gcc-c++  cmake  ninja-build  portaudio-devel"
       info "  ydotool  wl-clipboard  wtype"
       ask "Continue anyway? [y/N]"
       read -rp "   " choice
@@ -131,19 +138,28 @@ install_system_deps() {
 install_pipx() {
   step "Checking pipx"
 
-  # Reload PATH so pipx installed in a previous run of this script is visible.
-  export PATH="$PIPX_BIN:$PATH"
+  # Reload PATH so pipx installed by the system package manager or a previous
+  # run of this script is visible before we check for it.
+  export PATH="$PIPX_BIN:/usr/bin:$PATH"
 
   if command -v pipx &>/dev/null; then
     ok "pipx already installed ($(pipx --version))"
+    pipx ensurepath --quiet 2>/dev/null || true
+    export PATH="$PIPX_BIN:$PATH"
     return
   fi
 
-  info "Installing pipx…"
-  pip3 install --user pipx
+  # Last resort: pip3 install --user.  Avoided on managed distros (Fedora,
+  # Bazzite, Ubuntu 23.04+) because pipx is installed via the package manager
+  # above — this branch only runs on older Ubuntu or unknown distros.
+  info "pipx not found via package manager — falling back to pip3 install --user…"
+  if ! pip3 install --user pipx 2>/dev/null; then
+    # PEP 668: externally managed environment — try pipx from the OS anyway.
+    die "Could not install pipx. On Fedora/Bazzite run: sudo dnf install pipx\nOn Ubuntu/Debian run: sudo apt install pipx"
+  fi
   export PATH="$PIPX_BIN:$PATH"
   pipx ensurepath
-  ok "pipx installed."
+  ok "pipx installed via pip3."
 }
 
 # ── Paulie ────────────────────────────────────────────────────────────────────
