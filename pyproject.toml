@@ -1,0 +1,40 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "paulie"
+version = "0.1.0"
+description = "Local offline STT for Bazzite OS — NVIDIA Parakeet-TDT + silero-VAD"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+
+dependencies = [
+    # Audio capture
+    "sounddevice>=0.4.6",
+    "numpy>=1.24",
+
+    # Voice Activity Detection — requires torch
+    "silero-vad>=5.1",
+    "torch>=2.2",
+
+    # STT — Parakeet-TDT-0.6B-V3 via ONNX (CPU-optimised, no GPU required)
+    # Downloads ~640 MB of model weights from HuggingFace on first run.
+    "onnx-asr[cpu,hub]>=0.4",
+    # onnxruntime 1.24.1 has known compatibility issues with onnx-asr; pin below it.
+    "onnxruntime!=1.24.1",
+
+    # UI overlay
+    "PyQt6>=6.6",
+
+]
+
+[project.scripts]
+# Hotkey target — sends trigger to the daemon and exits immediately.
+paulie = "paulie.main:main"
+# Start once at login — loads models and waits for triggers.
+paulie-daemon = "paulie.daemon:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/paulie"]

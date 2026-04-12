@@ -1,0 +1,18 @@
+# ── Audio capture ─────────────────────────────────────────────────────────────
+sounddevice>=0.4.6
+numpy>=1.24
+
+# ── Voice Activity Detection ───────────────────────────────────────────────────
+silero-vad>=5.1
+torch>=2.2
+# For CUDA 12.4 replace torch with:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu124
+
+# ── STT — Parakeet-TDT-0.6B-V3 (ONNX, CPU-optimised) ─────────────────────────
+# Downloads ~640 MB of weights from HuggingFace on first run.
+onnx-asr[cpu,hub]>=0.4
+# onnxruntime 1.24.1 has known onnx-asr compatibility issues; exclude it.
+onnxruntime!=1.24.1
+
+# ── UI overlay ────────────────────────────────────────────────────────────────
+PyQt6>=6.6
