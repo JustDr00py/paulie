@@ -132,21 +132,29 @@ def inject_text(text: str) -> None:
         "YDOTOOL_SOCKET":  ydotool_socket,
     }
 
-    logger.info("Injecting %d chars via %s.", len(text), ydotool_socket)
+    # ydotool's default --key-delay is 12 ms/char — fine for short strings but
+    # it causes timeouts on longer dictations (900+ chars exceeds 10 s).
+    # 1 ms/char is imperceptible to every modern application and keeps even a
+    # 2000-char injection under 2 seconds.
+    KEY_DELAY_MS = 1
+    # Timeout: allow 50 ms per character as a generous ceiling, minimum 10 s.
+    timeout = max(10, len(text) * KEY_DELAY_MS * 50 // 1000)
+
+    logger.info("Injecting %d chars via %s (timeout=%ds).", len(text), ydotool_socket, timeout)
     try:
         subprocess.run(
-            ["ydotool", "type", "--", text],
+            ["ydotool", "type", f"--key-delay={KEY_DELAY_MS}", "--", text],
             check=True,
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=timeout,
             env=env,
         )
         logger.info("ydotool: text injected.")
     except FileNotFoundError:
         logger.error("ydotool not found — install it with: rpm-ostree install ydotool")
     except subprocess.TimeoutExpired:
-        logger.error("ydotool timed out after 10 s.")
+        logger.error("ydotool timed out after %d s.", timeout)
     except subprocess.CalledProcessError as exc:
         logger.error(
             "ydotool failed (%d): %s",
