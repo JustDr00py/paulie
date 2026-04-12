@@ -16,6 +16,7 @@ Returns a numpy float32 array (16 kHz, mono) ready for transcription.
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from collections import deque
@@ -31,8 +32,8 @@ logger = logging.getLogger(__name__)
 SAMPLE_RATE: int = 16_000           # Hz — required by Parakeet & silero-VAD
 CHUNK_MS: int = 32                  # ms per VAD chunk (must be 32 ms for silero)
 CHUNK_SAMPLES: int = SAMPLE_RATE * CHUNK_MS // 1000   # 512 samples
-SILENCE_THRESHOLD_S: float = 1.0   # seconds of silence before stop
-VAD_THRESHOLD: float = 0.45        # speech probability cutoff
+SILENCE_THRESHOLD_S: float = float(os.environ.get("PAULIE_SILENCE_S", "1.0"))
+VAD_THRESHOLD: float = float(os.environ.get("PAULIE_VAD_THRESHOLD", "0.45"))
 MAX_PRE_SPEECH_S: float = 8.0       # abort if no speech starts within this window
 MAX_RECORD_S: float = 120.0        # hard ceiling regardless of VAD state
 # 120 s accommodates fast speakers (~180 wpm ≈ 2160 chars) while still bounding
@@ -127,13 +128,20 @@ def record_until_silence(
         # indata shape: (frames, channels) — take channel 0.
         _queue.append(indata[:, 0].copy())
 
-    logger.info("Opening microphone stream (16 kHz mono).")
+    # PAULIE_DEVICE can be a device name substring or integer index.
+    _device_env = os.environ.get("PAULIE_DEVICE", "")
+    _device: str | int | None = None
+    if _device_env:
+        _device = int(_device_env) if _device_env.isdigit() else _device_env
+
+    logger.info("Opening microphone stream (16 kHz mono, device=%r).", _device)
     with sd.InputStream(
         samplerate=SAMPLE_RATE,
         channels=1,
         dtype="float32",
         blocksize=CHUNK_SAMPLES,
         callback=_audio_callback,
+        device=_device,
     ):
         while not _stop_event.is_set():
             # Pre-speech timeout: if the user triggered recording but never

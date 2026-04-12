@@ -56,7 +56,8 @@ systemctl reboot
 
 **Run ydotoold as a system service (starts automatically at boot):**
 
-The daemon creates a socket at `~/.ydotool_socket` which Paulie uses automatically.
+The daemon creates a socket at `~/.ydotool_socket` by default on this setup.
+Paulie auto-detects the socket location (see [Configuration](#configuration)).
 Running it as a systemd system service avoids needing sudo at login and ensures
 it starts before your session.
 
@@ -171,11 +172,18 @@ ExecStart=/var/home/sysadmin/.local/bin/paulie-daemon
 Restart=on-failure
 RestartSec=3
 Environment=QT_QPA_PLATFORM=wayland
+Environment=WAYLAND_DISPLAY=wayland-0
 Environment=YDOTOOL_SOCKET=/var/home/sysadmin/.ydotool_socket
 
 [Install]
 WantedBy=graphical-session.target
 ```
+
+> **Note — `WAYLAND_DISPLAY`:** systemd user services do not inherit the
+> compositor's environment automatically.  If the overlay never appears, run
+> `systemctl --user import-environment WAYLAND_DISPLAY XDG_RUNTIME_DIR` once
+> per session (add it to your shell's autostart), or set
+> `WAYLAND_DISPLAY=wayland-0` explicitly in the service file as shown above.
 
 Enable and start it:
 
@@ -229,15 +237,32 @@ Environment variables (export in your shell rc or set in the systemd service fil
 
 | Variable | Default | Description |
 |---|---|---|
-| `YDOTOOL_SOCKET` | `~/.ydotool_socket` | Path to the ydotoold socket |
-| `PAULIE_DEVICE` | `""` (system default) | `sounddevice` input device name or index |
-| `PAULIE_SILENCE_S` | `1.0` | Silence duration (seconds) before recording stops |
-| `PAULIE_VAD_THRESHOLD` | `0.45` | silero-VAD speech probability cutoff (0–1) |
+| `YDOTOOL_SOCKET` | auto-detected¹ | Path to the ydotoold socket |
+| `PAULIE_DEVICE` | system default | `sounddevice` input device — name substring or integer index |
+| `PAULIE_SILENCE_S` | `1.0` | Seconds of silence before recording stops |
+| `PAULIE_VAD_THRESHOLD` | `0.45` | silero-VAD speech probability cutoff (0.0–1.0) |
 | `PAULIE_MODEL` | `nemo-parakeet-tdt-0.6b-v3` | onnx-asr model name |
+| `WAYLAND_DISPLAY` | inherited | Wayland compositor socket — required when running under systemd |
+| `XDG_RUNTIME_DIR` | inherited | User runtime directory — used for the Paulie IPC socket path² |
+
+**¹ `YDOTOOL_SOCKET` auto-detection order:**
+1. `$YDOTOOL_SOCKET` if set explicitly
+2. `~/.ydotool_socket` ← default for ydotoold running as a system service (this setup)
+3. `$XDG_RUNTIME_DIR/ydotool_socket` ← default for ydotoold running as a user service
+4. `/tmp/.ydotool_socket` ← legacy fallback
+
+Set `YDOTOOL_SOCKET` explicitly in the service file to skip probing.
+
+**² Paulie IPC socket:** Paulie places its own trigger socket at
+`$XDG_RUNTIME_DIR/paulie-{uid}.sock` (`/run/user/1000/paulie-1000.sock`).
+This directory is mode `0700` (owner-only), which is more secure than `/tmp`.
+If `XDG_RUNTIME_DIR` is not set, the socket falls back to `/tmp/paulie-{uid}.sock`.
 
 To set variables for the autostart daemon, add them to the `[Service]` section
-of `~/.config/systemd/user/paulie-daemon.service`, then run
-`systemctl --user daemon-reload && systemctl --user restart paulie-daemon`.
+of `~/.config/systemd/user/paulie-daemon.service`, then run:
+```bash
+systemctl --user daemon-reload && systemctl --user restart paulie-daemon
+```
 
 ---
 

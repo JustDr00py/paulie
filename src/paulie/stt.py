@@ -12,6 +12,7 @@ onnx-asr accepts numpy arrays directly, so no temp file is needed.
 from __future__ import annotations
 
 import logging
+import os
 import threading
 from typing import Any
 
@@ -19,7 +20,7 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-MODEL_NAME: str = "nemo-parakeet-tdt-0.6b-v3"
+MODEL_NAME: str = os.environ.get("PAULIE_MODEL", "nemo-parakeet-tdt-0.6b-v3")
 SAMPLE_RATE: int = 16_000
 
 # Module-level singleton — model loaded once per process.
