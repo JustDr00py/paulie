@@ -224,21 +224,18 @@ class _Daemon(QObject):
         is transcribed and injected concurrently so audio collection continues
         without waiting for the previous transcription to finish.
         """
-        focus_restored = False
+        # Restore focus immediately so the target window is active for the
+        # entire session — not just before the first injection.  The overlay
+        # uses WA_ShowWithoutActivating so it won't steal focus back.
+        restore_focus(focused)
+        time.sleep(0.15)
 
         def _transcribe_and_inject(audio: "np.ndarray") -> None:  # noqa: F821
-            nonlocal focus_restored
             text = transcribe(self._model, audio)
             logger.debug("Utterance transcription: %r", text)
             logger.info("Utterance: %d chars.", len(text))
             if not text:
                 return
-            # Restore focus before the very first injection so the target
-            # window is active.  Subsequent utterances go to the same window.
-            if not focus_restored:
-                restore_focus(focused)
-                time.sleep(0.15)
-                focus_restored = True
             inject_text(text)
             self._overlay.set_last_text_signal.emit(text)
 

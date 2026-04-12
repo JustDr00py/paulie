@@ -104,8 +104,8 @@ inject_mode = "ydotool"
 
 # Dictation mode.
 #   single    — one recording per hotkey press, transcribed as a whole (default)
-#   utterance — mic stays open across sentences; each sentence is transcribed
-#               and injected as you finish speaking it
+#   utterance — [EXPERIMENTAL] mic stays open across sentences; each sentence
+#               is transcribed and injected as you finish speaking it
 mode = "single"
 
 # Utterance mode only: seconds of silence that end one sentence and trigger
