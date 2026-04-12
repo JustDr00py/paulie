@@ -33,6 +33,7 @@ logger = logging.getLogger(__name__)
 _KEY_TO_ENV: dict[str, str] = {
     "silence_s":     "PAULIE_SILENCE_S",
     "vad_threshold": "PAULIE_VAD_THRESHOLD",
+    "max_record_s":  "PAULIE_MAX_RECORD_S",
     "model":         "PAULIE_MODEL",
     "device":        "PAULIE_DEVICE",
     "inject_mode":   "PAULIE_INJECT",
@@ -57,6 +58,12 @@ silence_s = 1.0
 # Raise this if background noise triggers false starts.
 # Lower this if the first syllable of a word is being clipped.
 vad_threshold = 0.45
+
+# Hard ceiling on recording duration in seconds, regardless of VAD state.
+# Increase this for long-form dictation (lectures, meeting notes, etc.).
+# At 180 wpm a 10-minute recording produces roughly 10 800 chars — well within
+# what ydotool can inject.  Set to 0 to disable the ceiling (not recommended).
+max_record_s = 120.0
 
 # onnx-asr model name.  All models are downloaded automatically from HuggingFace
 # on first use and cached in ~/.cache/huggingface/hub/.

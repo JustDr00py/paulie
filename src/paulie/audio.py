@@ -38,13 +38,9 @@ SAMPLE_RATE: int = 16_000           # Hz — required by Parakeet & silero-VAD
 CHUNK_MS: int = 32                  # ms per VAD chunk (must be 32 ms for silero)
 CHUNK_SAMPLES: int = SAMPLE_RATE * CHUNK_MS // 1000   # 512 samples
 MAX_PRE_SPEECH_S: float = 8.0       # abort if no speech starts within this window
-MAX_RECORD_S: float = 120.0         # hard ceiling regardless of VAD state
-# 120 s accommodates fast speakers (~180 wpm ≈ 2160 chars) while still bounding
-# runaway recording from a stuck VAD.  30 s was too short for real dictation.
-#
-# PAULIE_SILENCE_S and PAULIE_VAD_THRESHOLD are read inside record_until_silence()
-# rather than at module level so that config.apply_config() can set them before
-# the first recording begins.
+# PAULIE_SILENCE_S, PAULIE_VAD_THRESHOLD, and PAULIE_MAX_RECORD_S are read
+# inside record_until_silence() rather than at module level so that
+# config.apply_config() can set them before the first recording begins.
 
 # Module-level singleton — loaded once per process.
 _VAD_MODEL: torch.nn.Module | None = None
@@ -120,6 +116,7 @@ def record_until_silence(
     # applied via os.environ after import are honoured on every call.
     silence_threshold_s: float = float(os.environ.get("PAULIE_SILENCE_S", "1.0"))
     vad_threshold: float = float(os.environ.get("PAULIE_VAD_THRESHOLD", "0.45"))
+    max_record_s: float = float(os.environ.get("PAULIE_MAX_RECORD_S", "120.0"))
 
     vad_model = load_vad_model()
 
@@ -128,7 +125,7 @@ def record_until_silence(
         vad_model.reset_states()
 
     silence_limit_chunks = int(silence_threshold_s * SAMPLE_RATE / CHUNK_SAMPLES)
-    max_chunks = int(MAX_RECORD_S * SAMPLE_RATE / CHUNK_SAMPLES)
+    max_chunks = int(max_record_s * SAMPLE_RATE / CHUNK_SAMPLES)
 
     all_chunks: list[np.ndarray] = []
     silence_chunks: int = 0
@@ -184,7 +181,7 @@ def record_until_silence(
             if len(all_chunks) >= max_chunks:
                 logger.warning(
                     "Maximum recording duration (%.1f s) reached — stopping.",
-                    MAX_RECORD_S,
+                    max_record_s,
                 )
                 _stop_event.set()
                 continue

@@ -301,6 +301,7 @@ Or create `~/.config/paulie/paulie.conf` manually:
 
 silence_s     = 1.0      # seconds of silence before recording stops
 vad_threshold = 0.45     # silero-VAD speech probability cutoff (0.0–1.0)
+max_record_s  = 120.0    # hard ceiling on recording duration in seconds
 # model  = "nemo-parakeet-tdt-0.6b-v3"   # onnx-asr model name
 # device = "HDA Intel PCH"               # mic name substring or integer index
 ```
@@ -319,6 +320,7 @@ in the `[Service]` section of `~/.config/systemd/user/paulie-daemon.service`.
 |---|---|---|
 | `PAULIE_SILENCE_S` | `1.0` | Seconds of silence before recording stops |
 | `PAULIE_VAD_THRESHOLD` | `0.45` | silero-VAD speech probability cutoff (0.0–1.0) |
+| `PAULIE_MAX_RECORD_S` | `120.0` | Hard ceiling on recording duration in seconds |
 | `PAULIE_MODEL` | `nemo-parakeet-tdt-0.6b-v3` | onnx-asr model name |
 | `PAULIE_DEVICE` | system default | `sounddevice` input device — name substring or integer index |
 | `PAULIE_INJECT` | `ydotool` | Injection mode: `ydotool` or `clipboard` |
