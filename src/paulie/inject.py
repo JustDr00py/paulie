@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import subprocess
 
 logger = logging.getLogger(__name__)
@@ -25,14 +26,16 @@ def save_focus() -> str | None:
         )
         if r.returncode == 0 and r.stdout.strip():
             wid = r.stdout.strip()
-            # Also grab the window name for diagnostics
-            name_r = subprocess.run(
-                ["xdotool", "getwindowname", wid],
-                capture_output=True, text=True, timeout=1,
-            )
-            name = name_r.stdout.strip() if name_r.returncode == 0 else "?"
-            logger.info("save_focus: xdotool captured window %s (%s)", wid, name)
-            return f"xdotool:{wid}"
+            if wid.isdigit():   # sanity-check before a second subprocess call
+                name_r = subprocess.run(
+                    ["xdotool", "getwindowname", wid],
+                    capture_output=True, text=True, timeout=1,
+                )
+                name = name_r.stdout.strip() if name_r.returncode == 0 else "?"
+                # SEC-08: window title is behavioural metadata — keep at DEBUG so it
+                # does not persist in the systemd journal at normal log levels.
+                logger.debug("save_focus: xdotool captured window %s (%s)", wid, name)
+                return f"xdotool:{wid}"
     except (FileNotFoundError, subprocess.TimeoutExpired):
         logger.debug("save_focus: xdotool not available")
 
@@ -44,7 +47,7 @@ def save_focus() -> str | None:
         )
         if r.returncode == 0 and r.stdout.strip():
             wid = r.stdout.strip()
-            logger.info("save_focus: kwin captured client %s", wid)
+            logger.debug("save_focus: kwin captured client %s", wid)
             return f"kwin:{wid}"
     except (FileNotFoundError, subprocess.TimeoutExpired):
         logger.debug("save_focus: qdbus not available")
@@ -59,6 +62,19 @@ def restore_focus(token: str | None) -> None:
         logger.warning("restore_focus: no saved window — skipping")
         return
     method, _, window_id = token.partition(":")
+
+    # SEC-06: validate window_id before passing to a subprocess.  Both ids come
+    # from our own save_focus(), but defensive validation ensures unexpected output
+    # (empty string, null bytes, multi-line) can never reach a child process.
+    if method == "xdotool":
+        if not window_id.isdigit():
+            logger.warning("restore_focus: unexpected xdotool window ID %r — skipping", window_id)
+            return
+    elif method == "kwin":
+        if not re.fullmatch(r"[0-9A-Fa-f\-]+", window_id):
+            logger.warning("restore_focus: unexpected KWin client ID %r — skipping", window_id)
+            return
+
     logger.info("restore_focus: restoring via %s to %s", method, window_id)
     try:
         if method == "xdotool":
@@ -85,11 +101,38 @@ def inject_text(text: str) -> None:
         logger.warning("Empty transcription — nothing to inject.")
         return
 
-    env = os.environ.copy()
-    if "YDOTOOL_SOCKET" not in env:
-        env["YDOTOOL_SOCKET"] = os.path.join(os.path.expanduser("~"), ".ydotool_socket")
+    # Resolve the ydotoold socket path.  ydotoold can place its socket in
+    # several locations depending on how it was started:
+    #   1. $YDOTOOL_SOCKET          — explicit user/admin override (always wins)
+    #   2. ~/.ydotool_socket        — default when started manually or via KDE Autostart
+    #   3. $XDG_RUNTIME_DIR/ydotool_socket — default for some systemd unit configs
+    #   4. /tmp/.ydotool_socket     — legacy / root-daemon fallback
+    # Probe in that order so we use whichever socket is actually live.
+    xdg = os.environ.get("XDG_RUNTIME_DIR", "")
+    _candidates = [
+        os.environ.get("YDOTOOL_SOCKET", ""),
+        os.path.join(os.path.expanduser("~"), ".ydotool_socket"),
+        os.path.join(xdg, "ydotool_socket") if xdg else "",
+        "/tmp/.ydotool_socket",
+    ]
+    ydotool_socket = next(
+        (p for p in _candidates if p and os.path.exists(p)),
+        _candidates[1],   # fall back to ~/.ydotool_socket if none are found
+    )
 
-    logger.info("Injecting %d chars.", len(text))
+    # SEC-04: pass a minimal, explicit environment to the subprocess rather than
+    # inheriting the full daemon environment.  This prevents LD_PRELOAD, PYTHONPATH,
+    # or other hostile variables from affecting the ydotool child process.
+    env: dict[str, str] = {
+        "PATH":            os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
+        "HOME":            os.environ.get("HOME", ""),
+        "XDG_RUNTIME_DIR": xdg,
+        "WAYLAND_DISPLAY": os.environ.get("WAYLAND_DISPLAY", ""),
+        "DISPLAY":         os.environ.get("DISPLAY", ""),
+        "YDOTOOL_SOCKET":  ydotool_socket,
+    }
+
+    logger.info("Injecting %d chars via %s.", len(text), ydotool_socket)
     try:
         subprocess.run(
             ["ydotool", "type", "--", text],
