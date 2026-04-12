@@ -292,14 +292,15 @@ paulie/
 |---|---|
 | `error: paulie daemon is not running` | Run `systemctl --user start paulie-daemon` or check `journalctl --user -u paulie-daemon` |
 | `ydotool not found` | `rpm-ostree install ydotool` then reboot |
-| `ydotool failed` / no text typed | Run `systemctl status ydotoold` — the system service may not be running |
-| `YDOTOOL_SOCKET` mismatch | Run `ls ~/.ydotool_socket` to confirm socket exists |
+| `ydotool failed (2)` / no text typed | ydotoold socket not found — run `systemctl status ydotoold` and confirm `ls ~/.ydotool_socket` exists; set `YDOTOOL_SOCKET` explicitly if the path is non-standard |
+| Transcription cuts off early | Recording hit the 120 s ceiling — check logs for `Maximum recording duration reached`; also verify `PAULIE_SILENCE_S` isn't set too high |
+| Overlay doesn't appear | `WAYLAND_DISPLAY` not set — add `Environment=WAYLAND_DISPLAY=wayland-0` to the service file or run `systemctl --user import-environment WAYLAND_DISPLAY` |
+| `Neither WAYLAND_DISPLAY nor DISPLAY is set` | Same as above |
 | `pip failed to build: texterrors / onnx / editdistance` | Build tools missing — run `rpm-ostree install python3-devel gcc gcc-c++ cmake ninja-build` then reboot |
 | `libGL.so.1` / `libEGL.so.1` / `libfontconfig.so.1` missing | `rpm-ostree install mesa-libGL mesa-libEGL qt6-qtbase fontconfig` then reboot |
 | `No such file or directory: 'paulie'` | Run `pipx ensurepath` and restart shell |
-| Overlay doesn't appear | Check `QT_QPA_PLATFORM=wayland` is set (Bazzite sets this by default) |
 | `CUDA out of memory` | Set `CUDA_VISIBLE_DEVICES=""` to force CPU mode |
-| Audio not captured | Run `paulie-daemon` from a terminal; list devices with `python -c "import sounddevice; print(sounddevice.query_devices())"` |
+| Wrong microphone used | Set `PAULIE_DEVICE` to the device name or index; list devices with `python3 -c "import sounddevice; print(sounddevice.query_devices())"` |
 
 ---
 
