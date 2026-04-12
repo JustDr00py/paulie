@@ -7,7 +7,7 @@ name = "paulie"
 version = "0.1.0"
 description = "Local offline STT for Bazzite OS — NVIDIA Parakeet-TDT + silero-VAD"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = { text = "MIT" }
 
 dependencies = [

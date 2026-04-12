@@ -35,8 +35,9 @@ _BOTTOM_MARGIN = 16
 _BORDER_RADIUS = 18
 _BG_COLOR      = QColor(18, 18, 18, 210)
 _TEXT_COLOR    = "#FFFFFF"
-_ACCENT_COLOR  = "#00D4AA"   # teal
-_AMBER_COLOR   = "#FFB300"   # amber
+_ACCENT_COLOR  = "#00D4AA"   # teal  — listening (waiting for speech)
+_WHITE_COLOR   = "#FFFFFF"   # white — recording (speech confirmed)
+_AMBER_COLOR   = "#FFB300"   # amber — processing (inference running)
 _FONT_FAMILY   = "Inter, Segoe UI, sans-serif"
 _FONT_SIZE_PT  = 13
 
@@ -77,6 +78,11 @@ class _SoundWave(QWidget):
         self._mode  = "listen"
         self._color = QColor(_ACCENT_COLOR)
         self._timer.start(50)
+
+    def set_recording(self) -> None:
+        self._mode  = "listen"   # same animation, different colour
+        self._color = QColor(_WHITE_COLOR)
+        # timer is already running from set_listening()
 
     def set_processing(self) -> None:
         self._mode  = "process"
@@ -133,6 +139,7 @@ class OverlayWindow(QWidget):
     """
 
     set_listening_signal  = pyqtSignal()
+    set_recording_signal  = pyqtSignal()
     set_processing_signal = pyqtSignal()
     hide_signal           = pyqtSignal()
     quit_signal           = pyqtSignal()
@@ -197,6 +204,7 @@ class OverlayWindow(QWidget):
 
     def _connect_signals(self) -> None:
         self.set_listening_signal.connect(self._on_listening)
+        self.set_recording_signal.connect(self._on_recording)
         self.set_processing_signal.connect(self._on_processing)
         self.hide_signal.connect(self._on_hide)
         self.quit_signal.connect(self._on_quit)
@@ -211,6 +219,11 @@ class OverlayWindow(QWidget):
         self.show()
         # Defer reposition so the compositor maps the window before we move it.
         QTimer.singleShot(0, self._reposition)
+
+    def _on_recording(self) -> None:
+        self._label.setText("Recording…")
+        self._label.setStyleSheet(f"color: {_WHITE_COLOR}; background: transparent;")
+        self._wave.set_recording()
 
     def _on_processing(self) -> None:
         self._label.setText("Processing…")

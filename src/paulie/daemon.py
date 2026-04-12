@@ -34,6 +34,7 @@ from PyQt6.QtCore import QObject, pyqtSignal
 from PyQt6.QtWidgets import QApplication
 
 from .audio import load_vad_model, record_until_silence
+from .config import apply_config
 from .inject import inject_text, restore_focus, save_focus
 from .stt import load_model, transcribe
 from .ui import OverlayWindow
@@ -122,15 +123,21 @@ class _Daemon(QObject):
         # threading.Event has explicit memory-ordering semantics across threads;
         # safer than a bare bool read/written from both main and worker threads.
         self._busy = threading.Event()
+        # Set by a second hotkey press while a pipeline is already running.
+        # Checked inside record_until_silence() to stop recording immediately.
+        self._abort_event = threading.Event()
 
         self._source = _TriggerSource(self)
         self._source.triggered.connect(self._on_trigger)
 
     def _on_trigger(self) -> None:
         if self._busy.is_set():
-            logger.info("Trigger ignored — pipeline already running.")
+            # Second hotkey press while a pipeline is already running — cancel it.
+            logger.info("Cancel requested — aborting current pipeline.")
+            self._abort_event.set()
             return
         self._busy.set()
+        self._abort_event.clear()
         # Capture focus BEFORE the overlay becomes visible so we know
         # which window to return to after injection.
         focused = save_focus()
@@ -139,7 +146,17 @@ class _Daemon(QObject):
 
     def _pipeline(self, focused: str | None) -> None:
         try:
-            audio = record_until_silence()
+            audio = record_until_silence(
+                on_speech_start=self._overlay.set_recording_signal.emit,
+                abort_event=self._abort_event,
+            )
+
+            # Abort requested — discard audio and hide without injecting.
+            if self._abort_event.is_set():
+                logger.info("Pipeline cancelled — discarding audio.")
+                self._overlay.hide_signal.emit()
+                return
+
             self._overlay.set_processing_signal.emit()
             text = transcribe(self._model, audio)
             # SEC-07: log the content only at DEBUG — full transcription text is
@@ -167,6 +184,9 @@ def main() -> None:
         format="%(asctime)s  %(levelname)-8s  %(name)s — %(message)s",
         datefmt="%H:%M:%S",
     )
+
+    # Apply config file values before models read their settings from os.environ.
+    apply_config()
 
     # Fail early with a clear message when the display environment is absent
     # (common when launched as a bare systemd user service without importing

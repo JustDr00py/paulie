@@ -20,8 +20,10 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-MODEL_NAME: str = os.environ.get("PAULIE_MODEL", "nemo-parakeet-tdt-0.6b-v3")
 SAMPLE_RATE: int = 16_000
+# PAULIE_MODEL is read inside load_model() so that config.apply_config() can
+# set it before the model is loaded.  The default is documented here for reference.
+_DEFAULT_MODEL = "nemo-parakeet-tdt-0.6b-v3"
 
 # Module-level singleton — model loaded once per process.
 _MODEL: Any = None
@@ -51,8 +53,9 @@ def load_model() -> Any:
                 "  pip install 'onnx-asr[cpu,hub]'"
             ) from exc
 
-        logger.info("Loading %s …  (downloading weights on first run)", MODEL_NAME)
-        _MODEL = onnx_asr.load_model(MODEL_NAME)
+        model_name = os.environ.get("PAULIE_MODEL", _DEFAULT_MODEL)
+        logger.info("Loading %s …  (downloading weights on first run)", model_name)
+        _MODEL = onnx_asr.load_model(model_name)
         logger.info("Model ready.")
         return _MODEL
 

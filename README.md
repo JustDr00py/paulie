@@ -21,12 +21,18 @@ Paulie runs as two processes:
 [hotkey] paulie ──► trigger sent via socket
               │
               ▼
-        [ PyQt6 overlay: "Listening…" ]
+        [ PyQt6 overlay: "Listening…" ]  ← teal bars, waiting for speech
               │
         [ silero-VAD + sounddevice ]  ← microphone
-              │   stops on 1.0 s silence
+              │   speech detected
               ▼
-        [ overlay: "Processing…" ]
+        [ overlay: "Recording…" ]  ← white bars, capturing speech
+              │
+        [ silero-VAD detects 1.0 s silence  ]
+              │                              ╲
+              │                     [hotkey again] → cancel → overlay hides
+              ▼
+        [ overlay: "Processing…" ]  ← amber bars, running inference
               │
               ▼
         [ Parakeet-TDT-0.6B-V3 inference (local, offline) ]
@@ -233,15 +239,42 @@ Environment=PAULIE_SILENCE_S=0.8
 
 ## Configuration
 
-Environment variables (export in your shell rc or set in the systemd service file):
+Paulie can be configured via a TOML config file **or** environment variables.
+Environment variables always win — the config file only fills in values not
+already set in the environment.
+
+### Config file (recommended)
+
+Create `~/.config/paulie/paulie.conf`:
+
+```toml
+# ~/.config/paulie/paulie.conf
+# All keys are optional — omit any you want to leave at the default.
+
+silence_s     = 1.0      # seconds of silence before recording stops
+vad_threshold = 0.45     # silero-VAD speech probability cutoff (0.0–1.0)
+# model  = "nemo-parakeet-tdt-0.6b-v3"   # onnx-asr model name
+# device = "HDA Intel PCH"               # mic name substring or integer index
+```
+
+After editing, restart the daemon:
+```bash
+systemctl --user restart paulie-daemon
+```
+
+### Environment variables
+
+Environment variables override the config file.  Set them in your shell rc or
+in the `[Service]` section of `~/.config/systemd/user/paulie-daemon.service`.
 
 | Variable | Default | Description |
 |---|---|---|
-| `YDOTOOL_SOCKET` | auto-detected¹ | Path to the ydotoold socket |
-| `PAULIE_DEVICE` | system default | `sounddevice` input device — name substring or integer index |
 | `PAULIE_SILENCE_S` | `1.0` | Seconds of silence before recording stops |
 | `PAULIE_VAD_THRESHOLD` | `0.45` | silero-VAD speech probability cutoff (0.0–1.0) |
 | `PAULIE_MODEL` | `nemo-parakeet-tdt-0.6b-v3` | onnx-asr model name |
+| `PAULIE_DEVICE` | system default | `sounddevice` input device — name substring or integer index |
+| `PAULIE_CONFIG` | `~/.config/paulie/paulie.conf` | Override the config file path |
+| `YDOTOOL_SOCKET` | auto-detected¹ | Path to the ydotoold socket |
 | `WAYLAND_DISPLAY` | inherited | Wayland compositor socket — required when running under systemd |
 | `XDG_RUNTIME_DIR` | inherited | User runtime directory — used for the Paulie IPC socket path² |
 
@@ -258,8 +291,7 @@ Set `YDOTOOL_SOCKET` explicitly in the service file to skip probing.
 This directory is mode `0700` (owner-only), which is more secure than `/tmp`.
 If `XDG_RUNTIME_DIR` is not set, the socket falls back to `/tmp/paulie-{uid}.sock`.
 
-To set variables for the autostart daemon, add them to the `[Service]` section
-of `~/.config/systemd/user/paulie-daemon.service`, then run:
+To apply environment variable changes to the autostart daemon:
 ```bash
 systemctl --user daemon-reload && systemctl --user restart paulie-daemon
 ```
@@ -274,6 +306,7 @@ paulie/
 │   └── paulie/
 │       ├── __init__.py   # version
 │       ├── audio.py      # sounddevice + silero-VAD recording loop
+│       ├── config.py     # TOML config file loader (~/.config/paulie/paulie.conf)
 │       ├── stt.py        # Parakeet model load + transcribe
 │       ├── inject.py     # ydotool text injection
 │       ├── ui.py         # PyQt6 borderless overlay
@@ -291,6 +324,8 @@ paulie/
 | Symptom | Fix |
 |---|---|
 | `error: paulie daemon is not running` | Run `systemctl --user start paulie-daemon` or check `journalctl --user -u paulie-daemon` |
+| Config file changes not taking effect | Restart the daemon: `systemctl --user restart paulie-daemon`. The config is read once at startup. |
+| Cancel (second hotkey press) doesn't stop recording | Confirm `paulie` is reaching the daemon: run `paulie` manually in a terminal and check `journalctl --user -u paulie-daemon` for `Cancel requested`. |
 | `ydotool not found` | `rpm-ostree install ydotool` then reboot |
 | `ydotool failed (2)` / no text typed | ydotoold socket not found — run `systemctl status ydotoold` and confirm `ls ~/.ydotool_socket` exists; set `YDOTOOL_SOCKET` explicitly if the path is non-standard |
 | `ydotool timed out` | Happens on long dictations if key injection is too slow. Paulie uses `--key-delay=1` (1 ms/char) with a dynamic timeout — ensure you are running the latest version via `pipx install . --force` |

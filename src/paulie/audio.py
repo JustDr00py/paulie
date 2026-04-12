@@ -4,13 +4,18 @@ audio.py — Microphone capture with Silero-VAD silence detection.
 Records from the default input device at 16 kHz mono.  A chunk of audio is
 fed to the VAD model every CHUNK_MS milliseconds.  Recording stops when:
   - Speech has been detected at least once, AND
-  - Silence has persisted for longer than SILENCE_THRESHOLD_S seconds.
+  - Silence has persisted for longer than PAULIE_SILENCE_S seconds.
 
 Two safety ceilings prevent runaway recording:
   - MAX_PRE_SPEECH_S: give up if no speech starts within this window.
   - MAX_RECORD_S: hard cap on total recording time regardless of VAD state.
 
+Recording can also be cancelled at any time by setting the optional
+``abort_event`` threading.Event passed to ``record_until_silence``.
+
 Returns a numpy float32 array (16 kHz, mono) ready for transcription.
+An empty array is returned when no speech was detected, the pre-speech
+timeout fired, or an abort was requested.
 """
 
 from __future__ import annotations
@@ -32,12 +37,14 @@ logger = logging.getLogger(__name__)
 SAMPLE_RATE: int = 16_000           # Hz — required by Parakeet & silero-VAD
 CHUNK_MS: int = 32                  # ms per VAD chunk (must be 32 ms for silero)
 CHUNK_SAMPLES: int = SAMPLE_RATE * CHUNK_MS // 1000   # 512 samples
-SILENCE_THRESHOLD_S: float = float(os.environ.get("PAULIE_SILENCE_S", "1.0"))
-VAD_THRESHOLD: float = float(os.environ.get("PAULIE_VAD_THRESHOLD", "0.45"))
 MAX_PRE_SPEECH_S: float = 8.0       # abort if no speech starts within this window
-MAX_RECORD_S: float = 120.0        # hard ceiling regardless of VAD state
+MAX_RECORD_S: float = 120.0         # hard ceiling regardless of VAD state
 # 120 s accommodates fast speakers (~180 wpm ≈ 2160 chars) while still bounding
 # runaway recording from a stuck VAD.  30 s was too short for real dictation.
+#
+# PAULIE_SILENCE_S and PAULIE_VAD_THRESHOLD are read inside record_until_silence()
+# rather than at module level so that config.apply_config() can set them before
+# the first recording begins.
 
 # Module-level singleton — loaded once per process.
 _VAD_MODEL: torch.nn.Module | None = None
@@ -80,6 +87,7 @@ def load_vad_model() -> torch.nn.Module:
 
 def record_until_silence(
     on_speech_start: Callable[[], None] | None = None,
+    abort_event: threading.Event | None = None,
 ) -> np.ndarray:
     """
     Block and record microphone audio until silence is detected.
@@ -96,19 +104,30 @@ def record_until_silence(
             the Qt main thread.  Any UI mutations inside the callback must be
             posted via a signal/slot or ``QMetaObject.invokeMethod``.
 
+    abort_event:
+        Optional threading.Event.  When set by an external thread, recording
+        stops immediately and an empty array is returned.  The caller is
+        responsible for clearing the event before the next recording begins.
+
     Returns
     -------
     np.ndarray
         Float32 mono PCM at 16 000 Hz.  An empty array is returned when no
-        speech was detected or the pre-speech timeout fired.
+        speech was detected, the pre-speech timeout fired, or an abort was
+        requested.
     """
+    # Read tunable settings here (not at module level) so that config values
+    # applied via os.environ after import are honoured on every call.
+    silence_threshold_s: float = float(os.environ.get("PAULIE_SILENCE_S", "1.0"))
+    vad_threshold: float = float(os.environ.get("PAULIE_VAD_THRESHOLD", "0.45"))
+
     vad_model = load_vad_model()
 
     # silero-VAD tracks hidden state internally; reset before a new utterance.
     if hasattr(vad_model, "reset_states"):
         vad_model.reset_states()
 
-    silence_limit_chunks = int(SILENCE_THRESHOLD_S * SAMPLE_RATE / CHUNK_SAMPLES)
+    silence_limit_chunks = int(silence_threshold_s * SAMPLE_RATE / CHUNK_SAMPLES)
     max_chunks = int(MAX_RECORD_S * SAMPLE_RATE / CHUNK_SAMPLES)
 
     all_chunks: list[np.ndarray] = []
@@ -144,6 +163,11 @@ def record_until_silence(
         device=_device,
     ):
         while not _stop_event.is_set():
+            # Caller-requested cancel (e.g. second hotkey press).
+            if abort_event is not None and abort_event.is_set():
+                logger.info("Recording cancelled by abort signal.")
+                break
+
             # Pre-speech timeout: if the user triggered recording but never
             # spoke (walked away, mic issue), don't block forever.
             if not speech_detected:
@@ -177,7 +201,7 @@ def record_until_silence(
             with torch.no_grad():
                 speech_prob: float = vad_model(tensor, SAMPLE_RATE).item()
 
-            if speech_prob >= VAD_THRESHOLD:
+            if speech_prob >= vad_threshold:
                 silence_chunks = 0
                 if not speech_detected:
                     speech_detected = True
@@ -191,7 +215,7 @@ def record_until_silence(
                     if silence_chunks >= silence_limit_chunks:
                         logger.info(
                             "Silence threshold reached after %.1f s — stopping.",
-                            SILENCE_THRESHOLD_S,
+                            silence_threshold_s,
                         )
                         _stop_event.set()
 
