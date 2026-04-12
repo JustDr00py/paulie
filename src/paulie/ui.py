@@ -5,38 +5,120 @@ The window is:
   • Always on top
   • Borderless and transparent background
   • Centred horizontally, pinned to the bottom of the primary screen
-  • Shows a pulsing "Listening…" label while audio capture is active
-  • Transitions to "Processing…" once VAD triggers end-of-speech
+  • Shows animated equalizer bars + label while audio capture is active
+  • Transitions to a ripple animation + "Processing…" once VAD triggers end-of-speech
 
 External code drives the overlay via Qt signals so that cross-thread updates
 are safe:
 
-    overlay.set_processing_signal.emit()   # switch label to "Processing…"
+    overlay.set_processing_signal.emit()   # switch to processing state
     overlay.quit_signal.emit()             # close the overlay & quit the app
 """
 
 from __future__ import annotations
 
 import logging
+import math
+import random
+import time
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QPainter, QPainterPath
-from PyQt6.QtWidgets import QApplication, QLabel, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QApplication, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 logger = logging.getLogger(__name__)
 
 # ── Design tokens ─────────────────────────────────────────────────────────────
-_WINDOW_WIDTH = 320
-_WINDOW_HEIGHT = 64
-_BOTTOM_MARGIN = 16          # pixels from the bottom of the screen
-_BORDER_RADIUS = 18          # px — pill shape
-_BG_COLOR = QColor(18, 18, 18, 210)   # near-black, slightly transparent
-_TEXT_COLOR = "#FFFFFF"
-_ACCENT_COLOR = "#00D4AA"    # teal — signals activity
-_FONT_FAMILY = "Inter, Segoe UI, sans-serif"
-_FONT_SIZE_PT = 15
-_PULSE_INTERVAL_MS = 800     # ms between opacity pulses
+_WINDOW_WIDTH  = 260
+_WINDOW_HEIGHT = 56
+_BOTTOM_MARGIN = 16
+_BORDER_RADIUS = 18
+_BG_COLOR      = QColor(18, 18, 18, 210)
+_TEXT_COLOR    = "#FFFFFF"
+_ACCENT_COLOR  = "#00D4AA"   # teal
+_AMBER_COLOR   = "#FFB300"   # amber
+_FONT_FAMILY   = "Inter, Segoe UI, sans-serif"
+_FONT_SIZE_PT  = 13
 
+
+# ── Sound-wave widget ─────────────────────────────────────────────────────────
+
+class _SoundWave(QWidget):
+    """
+    Animated equalizer bars.
+
+    Listening  → random bar heights, teal, fast (~50 ms tick).
+    Processing → slow sine ripple, amber.
+    Idle       → all bars at minimum height, no timer.
+    """
+
+    _BAR_COUNT = 5
+    _BAR_W     = 4
+    _BAR_GAP   = 3
+    _MIN_FRAC  = 0.12   # minimum bar height as fraction of widget height
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        total_w = self._BAR_COUNT * self._BAR_W + (self._BAR_COUNT - 1) * self._BAR_GAP
+        self.setFixedSize(total_w, 22)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+
+        self._color   = QColor("#888888")
+        self._mode    = "idle"
+        self._heights = [self._MIN_FRAC] * self._BAR_COUNT
+        self._targets = [self._MIN_FRAC] * self._BAR_COUNT
+
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._tick)
+
+    # ── Public API ────────────────────────────────────────────────────────────
+
+    def set_listening(self) -> None:
+        self._mode  = "listen"
+        self._color = QColor(_ACCENT_COLOR)
+        self._timer.start(50)
+
+    def set_processing(self) -> None:
+        self._mode  = "process"
+        self._color = QColor(_AMBER_COLOR)
+        # timer keeps running — just changes behaviour in _tick
+
+    def set_idle(self) -> None:
+        self._mode = "idle"
+        self._timer.stop()
+        self._heights = [self._MIN_FRAC] * self._BAR_COUNT
+        self.update()
+
+    # ── Internal ──────────────────────────────────────────────────────────────
+
+    def _tick(self) -> None:
+        if self._mode == "listen":
+            for i in range(self._BAR_COUNT):
+                self._heights[i] += (self._targets[i] - self._heights[i]) * 0.3
+                if random.random() < 0.3:
+                    self._targets[i] = random.uniform(0.2, 1.0)
+        elif self._mode == "process":
+            t = time.monotonic()
+            for i in range(self._BAR_COUNT):
+                self._heights[i] = 0.35 + 0.45 * math.sin(t * 4.0 + i * 1.2)
+        self.update()
+
+    def paintEvent(self, _event) -> None:  # noqa: N802
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        h = self.height()
+        for i in range(self._BAR_COUNT):
+            frac  = max(self._MIN_FRAC, self._heights[i])
+            bar_h = max(3, int(frac * h))
+            x     = i * (self._BAR_W + self._BAR_GAP)
+            y     = (h - bar_h) // 2
+            path  = QPainterPath()
+            path.addRoundedRect(x, y, self._BAR_W, bar_h, 2, 2)
+            painter.fillPath(path, self._color)
+
+
+# ── Overlay window ────────────────────────────────────────────────────────────
 
 class OverlayWindow(QWidget):
     """
@@ -44,37 +126,34 @@ class OverlayWindow(QWidget):
 
     Signals
     -------
-    set_processing_signal:
-        Emitted by the worker thread when speech ends and STT starts.
-    quit_signal:
-        Emitted by the worker thread after text is injected (or on error).
+    set_listening_signal  — show listening state
+    set_processing_signal — show processing state
+    hide_signal           — hide the overlay
+    quit_signal           — quit the application
     """
 
-    set_listening_signal = pyqtSignal()
+    set_listening_signal  = pyqtSignal()
     set_processing_signal = pyqtSignal()
-    hide_signal = pyqtSignal()
-    quit_signal = pyqtSignal()
+    hide_signal           = pyqtSignal()
+    quit_signal           = pyqtSignal()
 
     def __init__(self) -> None:
         super().__init__()
-        self._dot_count = 0
-        self._base_text = "Loading"
         self._setup_window()
         self._build_ui()
         self._connect_signals()
-        self._start_pulse()
 
-    # ── Window chrome ──────────────────────────────────────────────────────────
+    # ── Window chrome ─────────────────────────────────────────────────────────
 
     def _setup_window(self) -> None:
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
-            | Qt.WindowType.Tool              # keeps it off the taskbar
+            | Qt.WindowType.Tool
             | Qt.WindowType.WindowDoesNotAcceptFocus
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)  # show without activating
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.setFixedSize(_WINDOW_WIDTH, _WINDOW_HEIGHT)
         self._reposition()
 
@@ -90,29 +169,29 @@ class OverlayWindow(QWidget):
     # ── Widget tree ───────────────────────────────────────────────────────────
 
     def _build_ui(self) -> None:
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 0, 20, 0)
-        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        self._label = QLabel("Loading…", self)
+        row = QHBoxLayout()
+        row.setContentsMargins(18, 0, 18, 0)
+        row.setSpacing(10)
+        row.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self._wave = _SoundWave(self)
+        row.addWidget(self._wave)
+
+        self._label = QLabel("", self)
         font = QFont()
         font.setFamily(_FONT_FAMILY)
         font.setPointSize(_FONT_SIZE_PT)
         font.setWeight(QFont.Weight.Medium)
         self._label.setFont(font)
-        self._label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._label.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
         self._label.setStyleSheet(f"color: {_TEXT_COLOR}; background: transparent;")
+        row.addWidget(self._label)
 
-        # Teal dot indicator
-        self._dot = QLabel("●", self)
-        dot_font = QFont()
-        dot_font.setPointSize(10)
-        self._dot.setFont(dot_font)
-        self._dot.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._dot.setStyleSheet("color: #888888; background: transparent;")
-
-        layout.addWidget(self._dot)
-        layout.addWidget(self._label)
+        outer.addLayout(row)
 
     # ── Signals ───────────────────────────────────────────────────────────────
 
@@ -122,54 +201,35 @@ class OverlayWindow(QWidget):
         self.hide_signal.connect(self._on_hide)
         self.quit_signal.connect(self._on_quit)
 
-    # ── Animation ─────────────────────────────────────────────────────────────
-
-    def _start_pulse(self) -> None:
-        self._pulse_timer = QTimer(self)
-        self._pulse_timer.timeout.connect(self._pulse_tick)
-        self._pulse_timer.start(_PULSE_INTERVAL_MS)
-
-    def _pulse_tick(self) -> None:
-        self._dot_count = (self._dot_count + 1) % 4
-        dots = "." * self._dot_count
-        self._label.setText(f"{self._base_text}{dots}")
-
     # ── Slot handlers ─────────────────────────────────────────────────────────
 
     def _on_listening(self) -> None:
-        self._dot_count = 0
-        self._base_text = "Listening"
         self._label.setText("Listening…")
-        self._dot.setStyleSheet(f"color: {_ACCENT_COLOR}; background: transparent;")
+        self._label.setStyleSheet(f"color: {_TEXT_COLOR}; background: transparent;")
+        self._wave.set_listening()
         self.setWindowOpacity(1.0)
         self.show()
-        self._reposition()  # reposition after show — Wayland ignores pre-show move()
-        if not self._pulse_timer.isActive():
-            self._pulse_timer.start(_PULSE_INTERVAL_MS)
+        # Defer reposition so the compositor maps the window before we move it.
+        QTimer.singleShot(0, self._reposition)
 
     def _on_processing(self) -> None:
-        self._pulse_timer.stop()
-        self._base_text = "Processing"
         self._label.setText("Processing…")
-        self._dot.setStyleSheet("color: #FFB300; background: transparent;")  # amber
+        self._label.setStyleSheet(f"color: {_AMBER_COLOR}; background: transparent;")
+        self._wave.set_processing()
 
     def _on_hide(self) -> None:
-        self._pulse_timer.stop()
-        self.hide()  # True unmap — tells compositor to return focus to previous window
+        self._wave.set_idle()
+        self.hide()
 
     def _on_quit(self) -> None:
-        self._pulse_timer.stop()
+        self._wave.set_idle()
         QApplication.instance().quit()  # type: ignore[union-attr]
 
     # ── Custom painting ───────────────────────────────────────────────────────
 
-    def paintEvent(self, event) -> None:  # noqa: N802
+    def paintEvent(self, _event) -> None:  # noqa: N802
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-
         path = QPainterPath()
-        path.addRoundedRect(
-            0, 0, self.width(), self.height(),
-            _BORDER_RADIUS, _BORDER_RADIUS,
-        )
+        path.addRoundedRect(0, 0, self.width(), self.height(), _BORDER_RADIUS, _BORDER_RADIUS)
         painter.fillPath(path, _BG_COLOR)
