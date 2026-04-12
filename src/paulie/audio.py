@@ -33,8 +33,10 @@ CHUNK_MS: int = 32                  # ms per VAD chunk (must be 32 ms for silero
 CHUNK_SAMPLES: int = SAMPLE_RATE * CHUNK_MS // 1000   # 512 samples
 SILENCE_THRESHOLD_S: float = 1.0   # seconds of silence before stop
 VAD_THRESHOLD: float = 0.45        # speech probability cutoff
-MAX_PRE_SPEECH_S: float = 8.0      # abort if no speech starts within this window
-MAX_RECORD_S: float = 30.0         # hard ceiling regardless of VAD state
+MAX_PRE_SPEECH_S: float = 8.0       # abort if no speech starts within this window
+MAX_RECORD_S: float = 120.0        # hard ceiling regardless of VAD state
+# 120 s accommodates fast speakers (~180 wpm ≈ 2160 chars) while still bounding
+# runaway recording from a stuck VAD.  30 s was too short for real dictation.
 
 # Module-level singleton — loaded once per process.
 _VAD_MODEL: torch.nn.Module | None = None
