@@ -58,8 +58,27 @@ silence_s = 1.0
 # Lower this if the first syllable of a word is being clipped.
 vad_threshold = 0.45
 
-# onnx-asr model name.  Parakeet is fast, English-only, and runs well on CPU.
-# Whisper models (e.g. "whisper-base") are slower but support multiple languages.
+# onnx-asr model name.  All models are downloaded automatically from HuggingFace
+# on first use and cached in ~/.cache/huggingface/hub/.
+#
+# ── English / European (25 languages) ────────────────────────────────────────
+# nemo-parakeet-tdt-0.6b-v3     640 MB   25 EU langs  Fast, default, recommended
+# nemo-parakeet-tdt-0.6b-v2     640 MB   English      Slightly higher EN accuracy
+# nemo-parakeet-rnnt-0.6b       620 MB   English      RNN-T decoder variant
+# nemo-parakeet-ctc-0.6b        620 MB   English      CTC decoder, simplest
+# nemo-canary-1b-v2             980 MB   25 EU langs  Highest accuracy; slower
+#
+# ── Multilingual (99+ languages, includes Whisper) ───────────────────────────
+# onnx-community/whisper-tiny    39 MB   99+ langs    Fastest; lower accuracy
+# onnx-community/whisper-base   140 MB   99+ langs    Good balance
+# onnx-community/whisper-small  367 MB   99+ langs    Better accuracy
+# onnx-community/whisper-large-v3-turbo  809 MB  99+ langs  Near-large quality
+#
+# ── Russian ───────────────────────────────────────────────────────────────────
+# gigaam-v3-rnnt                220 MB   Russian      Best Russian accuracy
+# gigaam-v3-ctc                 220 MB   Russian      CTC variant
+# gigaam-v3-e2e-rnnt            220 MB   Russian      Includes punctuation
+#
 model = "nemo-parakeet-tdt-0.6b-v3"
 
 # Microphone device — name substring or integer index.

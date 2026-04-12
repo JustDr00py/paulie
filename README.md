@@ -1,7 +1,8 @@
-# Paulie — Local Offline STT for Bazzite OS
+# Paulie — Local Offline STT for Linux
 
 Push-to-talk dictation powered by **NVIDIA Parakeet-TDT-0.6B-V3** and **silero-VAD**.  
-Transcribes speech and types it into the focused Wayland window via `ydotool`.
+Transcribes speech and types it into the focused Wayland window via `ydotool`.  
+Supports 25 European languages out of the box; swap to a Whisper model for 99+ languages.
 
 ---
 
@@ -343,6 +344,64 @@ To apply environment variable changes to the autostart daemon:
 ```bash
 systemctl --user daemon-reload && systemctl --user restart paulie-daemon
 ```
+
+---
+
+## Supported Models
+
+All models are downloaded automatically from HuggingFace on first use and
+cached in `~/.cache/huggingface/hub/`. Set the model in `paulie.conf` or via
+`PAULIE_MODEL`.
+
+### English / European (25 languages)
+
+| Model | Size | Languages | Notes |
+|---|---|---|---|
+| `nemo-parakeet-tdt-0.6b-v3` | 640 MB | 25 EU langs | **Default.** Fast, accurate, recommended for most users |
+| `nemo-parakeet-tdt-0.6b-v2` | 640 MB | English | Slightly higher English-only accuracy than v3 |
+| `nemo-parakeet-rnnt-0.6b` | 620 MB | English | RNN-T decoder variant |
+| `nemo-parakeet-ctc-0.6b` | 620 MB | English | CTC decoder — simplest, lowest latency |
+| `nemo-canary-1b-v2` | 980 MB | 25 EU langs | Highest accuracy; noticeably slower on CPU |
+
+The 25 languages supported by v3 and Canary include English, German, French,
+Spanish, Italian, Portuguese, Dutch, Polish, Russian, and other major European
+languages.
+
+### Multilingual (99+ languages)
+
+| Model | Size | Notes |
+|---|---|---|
+| `onnx-community/whisper-tiny` | 39 MB | Fastest; lower accuracy — good for quick tasks |
+| `onnx-community/whisper-base` | 140 MB | Good balance of speed and accuracy |
+| `onnx-community/whisper-small` | 367 MB | Better accuracy, still reasonable on CPU |
+| `onnx-community/whisper-large-v3-turbo` | 809 MB | Near large-model quality at lower cost |
+
+Whisper models are significantly slower than Parakeet on CPU for English, but
+are the best choice for languages outside the 25 supported by Parakeet.
+
+### Russian
+
+| Model | Size | Notes |
+|---|---|---|
+| `gigaam-v3-rnnt` | 220 MB | Best accuracy for Russian (4.39% WER) |
+| `gigaam-v3-ctc` | 220 MB | CTC variant — slightly faster |
+| `gigaam-v3-e2e-rnnt` | 220 MB | Includes automatic punctuation and text normalisation |
+| `gigaam-v3-e2e-ctc` | 220 MB | CTC variant with punctuation |
+
+### Switching models
+
+Edit `~/.config/paulie/paulie.conf`:
+```toml
+model = "onnx-community/whisper-base"
+```
+
+Then restart the daemon:
+```bash
+systemctl --user restart paulie-daemon
+```
+
+The new model is downloaded on the first recording after restart. Old model
+weights remain in `~/.cache/huggingface/hub/` and are not removed automatically.
 
 ---
 
