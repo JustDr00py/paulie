@@ -132,6 +132,7 @@ class GtkOverlayBackend:
         # No left/right anchor → compositor centres the window horizontally
 
         canvas = Gtk.DrawingArea()
+        canvas.set_size_request(_W, _H)
         canvas.connect("draw", self._on_draw)
         self._win.add(canvas)
 
