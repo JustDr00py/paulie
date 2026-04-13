@@ -27,17 +27,13 @@ import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-
-os.environ.setdefault("QT_QPA_PLATFORM", "wayland")
-
-from PyQt6.QtCore import QObject, pyqtSignal
-from PyQt6.QtWidgets import QApplication
+from typing import Callable
 
 from .audio import load_vad_model, record_until_silence, record_utterances
 from .config import apply_config, write_default_config
+from .filters import apply_filler_filter, fix_spacing
 from .inject import inject_text, restore_focus, save_focus
 from .stt import load_model, transcribe
-from .ui import OverlayWindow
 
 logger = logging.getLogger(__name__)
 
@@ -58,13 +54,11 @@ def _cleanup_socket() -> None:
         pass
 
 
-class _TriggerSource(QObject):
-    """Accepts connections on a Unix socket and emits a Qt signal for each one."""
+class _TriggerSource:
+    """Accepts connections on a Unix socket and calls *on_trigger* for each one."""
 
-    triggered = pyqtSignal()
-
-    def __init__(self, parent: QObject | None = None) -> None:
-        super().__init__(parent)
+    def __init__(self, on_trigger: Callable[[], None]) -> None:
+        self._on_trigger = on_trigger
         self._sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
             os.unlink(SOCKET_PATH)
@@ -87,12 +81,7 @@ class _TriggerSource(QObject):
         os.chmod(SOCKET_PATH, 0o600)
         self._sock.listen(1)
 
-        # Clean up socket file on both graceful exit and SIGTERM.
         atexit.register(_cleanup_socket)
-        # SEC-09: call QApplication.quit() from the signal handler instead of
-        # sys.exit() — Qt's quit() is documented as safe to call from signal
-        # context and avoids invoking Python's exception machinery mid-inference.
-        signal.signal(signal.SIGTERM, lambda *_: QApplication.instance().quit())
 
         logger.info("Listening for triggers on %s", SOCKET_PATH)
         threading.Thread(target=self._accept_loop, daemon=True).start()
@@ -145,14 +134,13 @@ class _TriggerSource(QObject):
                 logger.debug("Status ping answered.")
             else:
                 # b"" (legacy), b"\x01" (explicit), or anything else → trigger.
-                self.triggered.emit()
+                self._on_trigger()
         finally:
             conn.close()
 
 
-class _Daemon(QObject):
-    def __init__(self, overlay: OverlayWindow, model: object) -> None:
-        super().__init__()
+class _Daemon:
+    def __init__(self, overlay: object, model: object) -> None:
         self._overlay = overlay
         self._model = model
         # threading.Event has explicit memory-ordering semantics across threads;
@@ -161,9 +149,17 @@ class _Daemon(QObject):
         # Set by a second hotkey press while a pipeline is already running.
         # Checked inside record_until_silence() to stop recording immediately.
         self._abort_event = threading.Event()
+        # Filler-word filter — initialised from config/env, togglable via tray.
+        self._filler_filter: bool = (
+            os.environ.get("PAULIE_FILLER_WORDS", "false").lower() == "true"
+        )
+        self._overlay.on_filler_toggle(self._on_filler_toggle)
 
-        self._source = _TriggerSource(self)
-        self._source.triggered.connect(self._on_trigger)
+        self._source = _TriggerSource(on_trigger=self._on_trigger)
+
+    def _on_filler_toggle(self, enabled: bool) -> None:
+        self._filler_filter = enabled
+        logger.info("Filler word filter %s.", "enabled" if enabled else "disabled")
 
     def _on_trigger(self) -> None:
         if self._busy.is_set():
@@ -176,7 +172,7 @@ class _Daemon(QObject):
         # Capture focus BEFORE the overlay becomes visible so we know
         # which window to return to after injection.
         focused = save_focus()
-        self._overlay.set_listening_signal.emit()
+        self._overlay.set_listening()
         mode = os.environ.get("PAULIE_MODE", "single").strip().lower()
         target = self._pipeline_utterance if mode == "utterance" else self._pipeline
         threading.Thread(target=target, args=(focused,), daemon=True).start()
@@ -184,18 +180,22 @@ class _Daemon(QObject):
     def _pipeline(self, focused: str | None) -> None:
         try:
             audio = record_until_silence(
-                on_speech_start=self._overlay.set_recording_signal.emit,
+                on_speech_start=self._overlay.set_recording,
                 abort_event=self._abort_event,
             )
 
             # Abort requested — discard audio and hide without injecting.
             if self._abort_event.is_set():
                 logger.info("Pipeline cancelled — discarding audio.")
-                self._overlay.hide_signal.emit()
+                self._overlay.hide()
                 return
 
-            self._overlay.set_processing_signal.emit()
+            self._overlay.set_processing()
             text = transcribe(self._model, audio)
+            if text:
+                text = fix_spacing(text)
+            if self._filler_filter and text:
+                text = apply_filler_filter(text)
             # SEC-07: log the content only at DEBUG — full transcription text is
             # privacy-sensitive and would otherwise persist in the systemd journal.
             logger.debug("Transcription: %r", text)
@@ -203,16 +203,16 @@ class _Daemon(QObject):
             # Hide overlay first so it cannot re-steal focus, then restore
             # the original window and give the compositor a moment to settle
             # before ydotool fires.
-            self._overlay.hide_signal.emit()
+            self._overlay.hide()
             restore_focus(focused)
             time.sleep(0.3)  # wait for hide + focus handback to settle
             inject_text(text)
             if text:
-                self._overlay.set_last_text_signal.emit(text)
+                self._overlay.set_last_text(text)
         except Exception:
             logger.exception("Unhandled exception in pipeline.")
             # Ensure the overlay is always dismissed, even on error.
-            self._overlay.hide_signal.emit()
+            self._overlay.hide()
         finally:
             self._busy.clear()
 
@@ -224,20 +224,29 @@ class _Daemon(QObject):
         is transcribed and injected concurrently so audio collection continues
         without waiting for the previous transcription to finish.
         """
-        # Restore focus immediately so the target window is active for the
-        # entire session — not just before the first injection.  The overlay
-        # uses WA_ShowWithoutActivating so it won't steal focus back.
+        # Let the overlay finish appearing before we ask the compositor to
+        # restore focus — firing restore_focus() before the window is mapped
+        # can lose the request on KDE Wayland.
+        time.sleep(0.1)
         restore_focus(focused)
-        time.sleep(0.15)
+        time.sleep(0.1)
 
         def _transcribe_and_inject(audio: "np.ndarray") -> None:  # noqa: F821
             text = transcribe(self._model, audio)
+            if text:
+                text = fix_spacing(text)
+            if self._filler_filter and text:
+                text = apply_filler_filter(text)
             logger.debug("Utterance transcription: %r", text)
             logger.info("Utterance: %d chars.", len(text))
             if not text:
                 return
+            # Re-restore focus before every injection — the long recording
+            # window means focus may have drifted since session start.
+            restore_focus(focused)
+            time.sleep(0.05)
             inject_text(text)
-            self._overlay.set_last_text_signal.emit(text)
+            self._overlay.set_last_text(text)
 
         try:
             # Single-worker pool keeps injections in order while still allowing
@@ -250,7 +259,7 @@ class _Daemon(QObject):
 
                 record_utterances(
                     on_utterance=on_utterance,
-                    on_speech_start=self._overlay.set_recording_signal.emit,
+                    on_speech_start=self._overlay.set_recording,
                     abort_event=self._abort_event,
                 )
 
@@ -264,7 +273,7 @@ class _Daemon(QObject):
         except Exception:
             logger.exception("Unhandled exception in utterance pipeline.")
         finally:
-            self._overlay.hide_signal.emit()
+            self._overlay.hide()
             self._busy.clear()
 
 
@@ -284,6 +293,68 @@ def _list_devices() -> None:
         '  device = "name substring"   # or an integer index\n'
         "Or via environment variable:  PAULIE_DEVICE=<name or index>"
     )
+
+
+def _make_qt_backend() -> object:
+    """Create and return a QtOverlayBackend."""
+    from .ui import QtOverlayBackend
+    return QtOverlayBackend()
+
+
+def _make_gtk_backend() -> object:
+    """
+    Create and return a GtkOverlayBackend.
+
+    Raises ImportError / ValueError if the required libraries are absent so
+    _pick_backend() can fall back to Qt gracefully.
+    """
+    import gi
+    gi.require_version('Gtk', '3.0')
+    gi.require_version('GtkLayerShell', '0.1')
+    from gi.repository import GtkLayerShell  # noqa: F401 — validates availability
+    from .ui_gtk import GtkOverlayBackend
+    return GtkOverlayBackend()
+
+
+def _pick_backend() -> object:
+    """
+    Select an overlay backend based on PAULIE_UI_BACKEND (or ui_backend in
+    paulie.conf).
+
+      auto  — GTK + layer-shell on native Wayland if available, Qt otherwise
+      qt    — always Qt
+      gtk   — always GTK + layer-shell (error if libs are missing)
+    """
+    choice = os.environ.get("PAULIE_UI_BACKEND", "auto").strip().lower()
+
+    if choice == "qt":
+        logger.info("UI backend: Qt (explicit)")
+        return _make_qt_backend()
+
+    if choice == "gtk":
+        logger.info("UI backend: GTK + layer-shell (explicit)")
+        try:
+            return _make_gtk_backend()
+        except (ImportError, ValueError) as exc:
+            sys.exit(
+                f"error: ui_backend = \"gtk\" requested but GTK layer-shell is not available: {exc}\n"
+                "Install the required packages (Bazzite / Fedora Atomic):\n"
+                "  rpm-ostree install gtk-layer-shell python3-gobject python3-cairo\n"
+                "  # reboot, then:\n"
+                "  pipx reinstall paulie --system-site-packages"
+            )
+
+    # auto: try GTK layer-shell on native Wayland, fall back to Qt
+    if os.environ.get("WAYLAND_DISPLAY"):
+        try:
+            backend = _make_gtk_backend()
+            logger.info("UI backend: GTK + layer-shell (auto)")
+            return backend
+        except (ImportError, ValueError) as exc:
+            logger.info("GTK layer-shell not available (%s) — using Qt.", exc)
+
+    logger.info("UI backend: Qt (auto)")
+    return _make_qt_backend()
 
 
 def main() -> None:
@@ -314,10 +385,10 @@ def main() -> None:
             "  systemctl --user import-environment WAYLAND_DISPLAY XDG_RUNTIME_DIR"
         )
 
-    app = QApplication(sys.argv)
-    app.setQuitOnLastWindowClosed(False)
+    backend = _pick_backend()
 
-    overlay = OverlayWindow()
+    # SIGTERM: ask the backend to quit gracefully so its event loop can clean up.
+    signal.signal(signal.SIGTERM, lambda *_: backend.quit())
 
     logger.info("Loading models…")
     with ThreadPoolExecutor(max_workers=2) as executor:
@@ -331,11 +402,12 @@ def main() -> None:
     vad_future.result()
     logger.info("Models ready. Paulie daemon running.")
 
-    # Store on `app` so the daemon object is owned by a stable reference for
-    # the lifetime of the event loop (avoids the noqa: F841 smell).
-    app._daemon = _Daemon(overlay, model)  # type: ignore[attr-defined]
+    # Keep the daemon object alive for the event loop's lifetime by storing it
+    # on the backend (the backend itself is referenced by the local scope until
+    # run() blocks, then by the SIGTERM closure).
+    backend._daemon = _Daemon(backend, model)  # type: ignore[attr-defined]
 
-    sys.exit(app.exec())
+    backend.run()
 
 
 if __name__ == "__main__":

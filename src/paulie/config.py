@@ -39,6 +39,8 @@ _KEY_TO_ENV: dict[str, str] = {
     "inject_mode":       "PAULIE_INJECT",
     "mode":              "PAULIE_MODE",
     "utterance_pause_s": "PAULIE_UTTERANCE_PAUSE_S",
+    "filler_words":      "PAULIE_FILLER_WORDS",
+    "ui_backend":        "PAULIE_UI_BACKEND",
 }
 
 _DEFAULT_CONFIG_PATH = Path.home() / ".config" / "paulie" / "paulie.conf"
@@ -113,6 +115,25 @@ mode = "single"
 # In utterance mode, set silence_s higher (e.g. 2.0) so the session doesn't
 # end during a natural thinking pause between sentences.
 utterance_pause_s = 0.5
+
+# Strip common spoken filler words (um, uh, you know, etc.) from transcriptions.
+# Can also be toggled live from the system tray icon without restarting.
+filler_words = false
+
+# Overlay UI backend.
+#   auto   — use GTK + wlr-layer-shell on native Wayland if available, Qt otherwise
+#   qt     — always use PyQt6 (works on X11, XWayland, and Wayland)
+#   gtk    — always use GTK + wlr-layer-shell (requires python3-gobject + gtk-layer-shell)
+#
+# The GTK backend places the overlay on the compositor's OVERLAY layer so it
+# never appears in alt-tab and never steals keyboard focus on KDE Plasma / sway.
+# GNOME does not support wlr-layer-shell; use qt or auto on GNOME.
+#
+# To enable the GTK backend on Bazzite:
+#   rpm-ostree install gtk-layer-shell python3-gobject python3-cairo
+#   # reboot, then:
+#   pipx reinstall paulie --system-site-packages
+ui_backend = "auto"
 """
 
 

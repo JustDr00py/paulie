@@ -71,6 +71,8 @@ install_system_deps() {
         pipx
         python3-devel gcc gcc-c++ cmake ninja-build portaudio-devel
         ydotool wl-clipboard wtype
+        gtk-layer-shell python3-gobject python3-cairo
+        libayatana-appindicator-gtk3
       )
       local missing=()
       for pkg in "${wanted[@]}"; do
@@ -102,7 +104,9 @@ install_system_deps() {
       sudo dnf install -y \
         pipx \
         python3-devel gcc gcc-c++ cmake ninja-build portaudio-devel \
-        ydotool wl-clipboard wtype
+        ydotool wl-clipboard wtype \
+        gtk-layer-shell python3-gobject python3-cairo \
+        libayatana-appindicator-gtk3
       ok "System dependencies installed."
       ;;
 
@@ -112,10 +116,13 @@ install_system_deps() {
       sudo apt-get install -y \
         pipx \
         python3-dev gcc g++ cmake ninja-build libportaudio2 libportaudio-dev \
-        ydotool wl-clipboard 2>/dev/null || \
+        ydotool wl-clipboard \
+        python3-gi python3-gi-cairo gir1.2-gtk-layer-shell-0.1 \
+        gir1.2-ayatanaappindicator3-0.1 2>/dev/null || \
       sudo apt-get install -y \
         python3-dev gcc g++ cmake ninja-build libportaudio2 libportaudio-dev \
-        ydotool wl-clipboard
+        ydotool wl-clipboard \
+        python3-gi python3-gi-cairo
       if ! command -v wtype &>/dev/null; then
         warn "wtype not found in apt repos — clipboard mode Ctrl+V will fall back to xdotool."
         sudo apt-get install -y xdotool 2>/dev/null || true
@@ -166,7 +173,9 @@ install_pipx() {
 install_paulie() {
   step "Installing Paulie"
   export PATH="$PIPX_BIN:$PATH"
-  pipx install --force "$SCRIPT_DIR"
+  # --system-site-packages gives the venv access to system-installed native
+  # Python bindings (python3-gobject, python3-cairo) needed by the GTK backend.
+  pipx install --force --system-site-packages "$SCRIPT_DIR"
   ok "Paulie installed.  Binaries: paulie  paulie-daemon"
 }
 

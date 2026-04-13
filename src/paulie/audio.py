@@ -276,20 +276,35 @@ def record_utterances(
         )
 
     vad_model = load_vad_model()
+    # Reset only at session start — NOT between utterances.  Keeping the model
+    # warm avoids the cold-start clipping that would otherwise drop the first
+    # syllable of each new sentence.
     if hasattr(vad_model, "reset_states"):
         vad_model.reset_states()
 
     utterance_pause_chunks: int = int(utterance_pause_s * SAMPLE_RATE / CHUNK_SAMPLES)
     session_end_chunks: int    = int(session_end_s    * SAMPLE_RATE / CHUNK_SAMPLES)
     max_chunks: int            = int(max_record_s     * SAMPLE_RATE / CHUNK_SAMPLES)
+    # Minimum confirmed speech chunks before a flush is sent for transcription.
+    # Clips shorter than ~320 ms are almost certainly noise or a stray syllable.
+    min_speech_chunks: int     = int(0.32 * SAMPLE_RATE / CHUNK_SAMPLES)
+    # Consecutive above-threshold frames required before declaring speech.
+    # Prevents single-chunk noise spikes from opening a new utterance.
+    _SPEECH_ENTRY_REQUIRED: int = 2
+    # Grace period (chunks) after a flush before session-end silence is counted.
+    # Gives the VAD model a moment to stabilise for the next sentence.
+    _POST_FLUSH_GRACE: int      = int(0.15 * SAMPLE_RATE / CHUNK_SAMPLES)
 
     utterance_buf: list[np.ndarray] = []
-    silence_chunks: int  = 0
-    speech_in_utt: bool  = False   # speech detected in the current utterance
-    session_started: bool = False  # at least one utterance has been heard
+    silence_chunks: int   = 0
+    speech_in_utt: bool   = False   # speech confirmed in the current utterance
+    session_started: bool = False   # at least one utterance has been heard
     speech_cb_fired: bool = False
-    total_chunks: int    = 0
-    start_time: float    = time.monotonic()
+    total_chunks: int     = 0
+    speech_entry_buf: int = 0       # consecutive above-threshold frames (hysteresis)
+    speech_chunks_in_utt: int = 0  # confirmed speech frames in current utterance
+    post_flush_grace: int = 0       # counts down after each utterance flush
+    start_time: float     = time.monotonic()
 
     _queue: deque[np.ndarray] = deque()
 
@@ -347,43 +362,61 @@ def record_utterances(
 
             # ── VAD decision ───────────────────────────────────────────────
             if speech_prob >= vad_threshold:
-                silence_chunks = 0
-                if not speech_in_utt:
-                    speech_in_utt   = True
-                    session_started = True
-                    logger.info("Speech detected.")
-                    if on_speech_start and not speech_cb_fired:
-                        speech_cb_fired = True
-                        on_speech_start()
+                speech_entry_buf = min(speech_entry_buf + 1, _SPEECH_ENTRY_REQUIRED)
+                silence_chunks   = 0
+                post_flush_grace = 0
+
+                # Only declare speech after N consecutive above-threshold frames
+                # so that brief noise spikes don't open a false utterance.
+                if speech_entry_buf >= _SPEECH_ENTRY_REQUIRED:
+                    speech_chunks_in_utt += 1
+                    if not speech_in_utt:
+                        speech_in_utt   = True
+                        session_started = True
+                        logger.info("Speech detected.")
+                        if on_speech_start and not speech_cb_fired:
+                            speech_cb_fired = True
+                            on_speech_start()
             else:
-                silence_chunks += 1
+                speech_entry_buf = 0
 
                 if speech_in_utt:
+                    silence_chunks += 1
                     # ── Utterance boundary ─────────────────────────────────
                     if silence_chunks >= utterance_pause_chunks:
                         audio = np.concatenate(utterance_buf)
-                        logger.info(
-                            "Utterance boundary — flushing %.2f s of audio.",
-                            len(audio) / SAMPLE_RATE,
-                        )
-                        on_utterance(audio)
-                        # Reset for the next utterance; keep VAD clean.
-                        utterance_buf  = []
-                        silence_chunks = 0
-                        speech_in_utt  = False
-                        if hasattr(vad_model, "reset_states"):
-                            vad_model.reset_states()
+                        if speech_chunks_in_utt >= min_speech_chunks:
+                            logger.info(
+                                "Utterance boundary — flushing %.2f s of audio.",
+                                len(audio) / SAMPLE_RATE,
+                            )
+                            on_utterance(audio)
+                        else:
+                            logger.debug(
+                                "Utterance too short (%d speech chunks) — discarding.",
+                                speech_chunks_in_utt,
+                            )
+                        # Reset utterance state; VAD model stays warm.
+                        utterance_buf        = []
+                        silence_chunks       = 0
+                        speech_in_utt        = False
+                        speech_chunks_in_utt = 0
+                        post_flush_grace     = _POST_FLUSH_GRACE
                 else:
                     # ── Session-end silence (no speech in current window) ──
-                    if silence_chunks >= session_end_chunks:
-                        logger.info(
-                            "Session-end silence (%.1f s) reached — ending.", session_end_s
-                        )
-                        break
+                    if post_flush_grace > 0:
+                        post_flush_grace -= 1
+                    else:
+                        silence_chunks += 1
+                        if session_started and silence_chunks >= session_end_chunks:
+                            logger.info(
+                                "Session-end silence (%.1f s) reached — ending.", session_end_s
+                            )
+                            break
 
     # Flush any trailing speech that didn't hit the utterance-pause threshold
     # (e.g. user was still speaking when max_record_s fired).
-    if utterance_buf and speech_in_utt:
+    if utterance_buf and speech_in_utt and speech_chunks_in_utt >= min_speech_chunks:
         audio = np.concatenate(utterance_buf)
         if len(audio) / SAMPLE_RATE >= 0.1:
             logger.info("Flushing trailing %.2f s of audio.", len(audio) / SAMPLE_RATE)

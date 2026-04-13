@@ -25,8 +25,11 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 import random
+import sys
 import time
+from typing import Callable
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QIcon, QPainter, QPainterPath, QPixmap
@@ -172,6 +175,7 @@ class OverlayWindow(QWidget):
     set_last_text_signal  = pyqtSignal(str)
     hide_signal           = pyqtSignal()
     quit_signal           = pyqtSignal()
+    filler_toggled_signal = pyqtSignal(bool)
 
     def __init__(self) -> None:
         super().__init__()
@@ -249,6 +253,12 @@ class OverlayWindow(QWidget):
         self._tray_last_action = menu.addAction("No transcription yet")
         self._tray_last_action.setEnabled(False)
         menu.addSeparator()
+        self._filler_action = menu.addAction("Remove filler words")
+        self._filler_action.setCheckable(True)
+        initial = os.environ.get("PAULIE_FILLER_WORDS", "false").lower() == "true"
+        self._filler_action.setChecked(initial)
+        self._filler_action.toggled.connect(self.filler_toggled_signal.emit)
+        menu.addSeparator()
         quit_action = menu.addAction("Quit Paulie")
         quit_action.triggered.connect(self.quit_signal.emit)
 
@@ -322,3 +332,43 @@ class OverlayWindow(QWidget):
         path = QPainterPath()
         path.addRoundedRect(0, 0, self.width(), self.height(), _BORDER_RADIUS, _BORDER_RADIUS)
         painter.fillPath(path, _BG_COLOR)
+
+
+# ── Qt backend adapter ────────────────────────────────────────────────────────
+
+class QtOverlayBackend:
+    """
+    Thin adapter that wraps OverlayWindow and presents the toolkit-agnostic
+    backend interface used by the daemon.  All thread-safety is handled by
+    OverlayWindow's Qt signals.
+    """
+
+    def __init__(self) -> None:
+        os.environ.setdefault("QT_QPA_PLATFORM", "wayland")
+        self._app = QApplication.instance() or QApplication(sys.argv)
+        self._app.setQuitOnLastWindowClosed(False)
+        self._w = OverlayWindow()
+
+    def set_listening(self) -> None:
+        self._w.set_listening_signal.emit()
+
+    def set_recording(self) -> None:
+        self._w.set_recording_signal.emit()
+
+    def set_processing(self) -> None:
+        self._w.set_processing_signal.emit()
+
+    def set_last_text(self, text: str) -> None:
+        self._w.set_last_text_signal.emit(text)
+
+    def hide(self) -> None:
+        self._w.hide_signal.emit()
+
+    def quit(self) -> None:
+        self._w.quit_signal.emit()
+
+    def on_filler_toggle(self, cb: Callable[[bool], None]) -> None:
+        self._w.filler_toggled_signal.connect(cb)
+
+    def run(self) -> None:
+        sys.exit(self._app.exec())
