@@ -47,16 +47,16 @@ except (ImportError, ValueError):
 logger = logging.getLogger(__name__)
 
 # ── Design tokens (kept in sync with ui.py) ───────────────────────────────────
-_W             = 260
-_H             = 56
+_W             = 200
+_H             = 42
 _BOTTOM_MARGIN = 16
-_RADIUS        = 18
-_LEFT_MARGIN   = 18
+_RADIUS        = 14
+_LEFT_MARGIN   = 14
 _BAR_COUNT     = 5
-_BAR_W         = 4
-_BAR_GAP       = 3
-_BAR_AREA_W    = _BAR_COUNT * _BAR_W + (_BAR_COUNT - 1) * _BAR_GAP   # 32 px
-_LABEL_GAP     = 10
+_BAR_W         = 3
+_BAR_GAP       = 2
+_BAR_AREA_W    = _BAR_COUNT * _BAR_W + (_BAR_COUNT - 1) * _BAR_GAP   # 23 px
+_LABEL_GAP     = 8
 _LABEL_X       = _LEFT_MARGIN + _BAR_AREA_W + _LABEL_GAP
 
 # RGBA tuples (0.0–1.0) matching the Qt palette
@@ -183,7 +183,7 @@ class GtkOverlayBackend:
         layout.set_text(self._label_text, -1)
         desc = Pango.FontDescription()
         desc.set_family("Inter, Segoe UI, Sans")
-        desc.set_size(13 * Pango.SCALE)
+        desc.set_size(11 * Pango.SCALE)
         desc.set_weight(Pango.Weight.MEDIUM)
         layout.set_font_description(desc)
         _ink, logical = layout.get_pixel_extents()
