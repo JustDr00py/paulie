@@ -245,7 +245,7 @@ class _Daemon:
             # window means focus may have drifted since session start.
             restore_focus(focused)
             time.sleep(0.05)
-            inject_text(text)
+            inject_text(text + " ")
             self._overlay.set_last_text(text)
 
         try:
