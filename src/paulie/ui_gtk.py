@@ -47,16 +47,16 @@ except (ImportError, ValueError):
 logger = logging.getLogger(__name__)
 
 # ── Design tokens (kept in sync with ui.py) ───────────────────────────────────
-_W             = 200
-_H             = 42
+_W             = 160
+_H             = 32
 _BOTTOM_MARGIN = 16
-_RADIUS        = 14
-_LEFT_MARGIN   = 14
-_BAR_COUNT     = 5
+_RADIUS        = 10
+_LEFT_MARGIN   = 10
+_BAR_COUNT     = 4
 _BAR_W         = 3
 _BAR_GAP       = 2
-_BAR_AREA_W    = _BAR_COUNT * _BAR_W + (_BAR_COUNT - 1) * _BAR_GAP   # 23 px
-_LABEL_GAP     = 8
+_BAR_AREA_W    = _BAR_COUNT * _BAR_W + (_BAR_COUNT - 1) * _BAR_GAP   # 18 px
+_LABEL_GAP     = 7
 _LABEL_X       = _LEFT_MARGIN + _BAR_AREA_W + _LABEL_GAP
 
 # RGBA tuples (0.0–1.0) matching the Qt palette
@@ -167,7 +167,7 @@ class GtkOverlayBackend:
         return False
 
     def _draw_bars(self, cr: cairo.Context, h: int) -> None:
-        bar_max_h = h - 12   # 6 px padding top + bottom
+        bar_max_h = h - 8   # 4 px padding top + bottom
         cr.set_source_rgba(*self._anim_color)
         for i in range(_BAR_COUNT):
             frac  = max(0.12, self._bar_heights[i])
@@ -183,7 +183,7 @@ class GtkOverlayBackend:
         layout.set_text(self._label_text, -1)
         desc = Pango.FontDescription()
         desc.set_family("Inter, Segoe UI, Sans")
-        desc.set_size(11 * Pango.SCALE)
+        desc.set_size(10 * Pango.SCALE)
         desc.set_weight(Pango.Weight.MEDIUM)
         layout.set_font_description(desc)
         _ink, logical = layout.get_pixel_extents()

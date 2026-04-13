@@ -106,8 +106,11 @@ inject_mode = "ydotool"
 
 # Dictation mode.
 #   single    — one recording per hotkey press, transcribed as a whole (default)
-#   utterance — [EXPERIMENTAL] mic stays open across sentences; each sentence
+#   utterance — mic stays open across sentences; each sentence
 #               is transcribed and injected as you finish speaking it
+#               (works best with ui_backend = "gtk" or "auto" on KDE/sway —
+#               the GTK backend keeps focus on the target window between
+#               injections; Qt can cause focus to drift)
 mode = "single"
 
 # Utterance mode only: seconds of silence that end one sentence and trigger
