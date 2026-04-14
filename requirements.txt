@@ -4,7 +4,7 @@ numpy>=1.24
 
 # ── Voice Activity Detection ───────────────────────────────────────────────────
 silero-vad>=5.1
-torch>=2.2
+torch>=2.8.0
 # For CUDA 12.4 replace torch with:
 #   pip install torch --index-url https://download.pytorch.org/whl/cu124
 

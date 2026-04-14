@@ -17,7 +17,7 @@ dependencies = [
 
     # Voice Activity Detection — requires torch
     "silero-vad>=5.1",
-    "torch>=2.2",
+    "torch>=2.8.0",
 
     # STT — Parakeet-TDT-0.6B-V3 via ONNX (CPU-optimised, no GPU required)
     # Downloads ~640 MB of model weights from HuggingFace on first run.
